@@ -41,6 +41,7 @@ cen64_cold static CEN64_THREAD_RETURN_TYPE run_device_thread(void *opaque);
 
 // Called when another simulation instance is desired.
 int cen64_main(int argc, const char **argv) {
+  setvbuf(stdout, NULL, _IOLBF, 0);
   struct controller controller[4] = { { 0, }, };
 	struct cen64_options options = default_cen64_options;
   options.controller = controller;
@@ -476,6 +477,8 @@ int run_device(struct cen64_device *device, bool no_video) {
 
   if (!no_video)
     cen64_gl_window_thread(device);
+  else
+    cen64_thread_join(&thread); /* headless: block until the device thread finishes */
 
   device->running = false;
   cen64_thread_join(&thread);

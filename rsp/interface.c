@@ -17,6 +17,9 @@
 
 // DMA into the RSP's memory space.
 void rsp_dma_read(struct rsp *rsp) {
+  /* SMOptimize: count DMAs into IMEM (ucode loads + F3DEX2 overlay swaps, i.e. clipping) */
+  extern unsigned rspstat_imem_dma;
+  if (rsp->regs[RSP_CP0_REGISTER_DMA_CACHE] & 0x1000) rspstat_imem_dma++;
   uint32_t length = (rsp->regs[RSP_CP0_REGISTER_DMA_READ_LENGTH] & 0xFFF) + 1;
   uint32_t skip = rsp->regs[RSP_CP0_REGISTER_DMA_READ_LENGTH] >> 20 & 0xFFF;
   unsigned count = rsp->regs[RSP_CP0_REGISTER_DMA_READ_LENGTH] >> 12 & 0xFF;

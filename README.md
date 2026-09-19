@@ -1,3 +1,5 @@
+**This fork adds headless profiling and benchmarking hooks — see [PROFILING.md](PROFILING.md).**
+
 <p align="center">
   <img src="/assets/logo.png" />
 </p>

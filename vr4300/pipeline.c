@@ -108,6 +108,12 @@ static int vr4300_rf_stage(struct vr4300 *vr4300) {
     rfex_latch->paddr = paddr;
     rfex_latch->cached = cached;
 
+    if (cached && vr4300->profile_samples) {
+      uint32_t idx = (uint32_t) vaddr - 0x80000000;
+      idx &= (8 * 1024 * 1024) - 1;
+      vr4300->profile_samples[idx + 3 * (8 * 1024 * 1024)]++;
+    }
+
     VR4300_ICB(vr4300);
     return 1;
   }

@@ -24,11 +24,22 @@ const char *mi_register_mnemonics[NUM_MI_REGISTERS] = {
 };
 #endif
 
+uint64_t *g_vr4300_profile_samples = NULL;
+
 void vr4300_cycle(struct vr4300 *vr4300) {
   struct vr4300_pipeline *pipeline = &vr4300->pipeline;
 
   // Increment counters.
   vr4300->regs[VR4300_CP0_REGISTER_COUNT]++;
+
+  // Profiling: charge this cycle to the instruction in the DC stage, so that a
+  // stall lands on the load/store (or the instruction after an I-fetch) that
+  // caused it.
+  if (vr4300->profile_samples) {
+    uint32_t idx = (uint32_t) pipeline->exdc_latch.common.pc - 0x80000000;
+    idx &= (8 * 1024 * 1024) - 1;
+    vr4300->profile_samples[idx + 2 * (8 * 1024 * 1024)]++;
+  }
 
   // We're stalling for something...
   if (pipeline->cycles_to_stall > 0)
@@ -67,9 +78,10 @@ int vr4300_init(struct vr4300 *vr4300, struct bus_controller *bus, bool profilin
   vr4300->mi_regs[MI_VERSION_REG] = 0x01010101;
   vr4300->mi_regs[MI_INIT_MODE_REG] = 0x80;
 
-  if (profiling)
-    vr4300->profile_samples = calloc(2 * 8 * 1024 * 1024, sizeof(uint64_t));
-  else
+  if (profiling) {
+    vr4300->profile_samples = calloc(4 * 8 * 1024 * 1024, sizeof(uint64_t));
+    g_vr4300_profile_samples = vr4300->profile_samples;
+  } else
     vr4300->profile_samples = NULL;
 
   vr4300_debug_init(&vr4300->debug);

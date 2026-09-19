@@ -535,6 +535,16 @@ static void compute_color_index(uint32_t* cidx, uint32_t readshort, uint32_t nyb
 static void read_tmem_copy(int s, int s1, int s2, int s3, int t, uint32_t tilenum, uint32_t* sortshort, int* hibits, int* lowbits);
 static void replicate_for_copy(uint32_t* outbyte, uint32_t inshort, uint32_t nybbleoffset, uint32_t tilenum, uint32_t tformat, uint32_t tsize);
 static void fetch_qword_copy(uint32_t* hidword, uint32_t* lowdword, int32_t ssss, int32_t ssst, uint32_t tilenum);
+
+/* --- RDP work counters (SMOptimize): reported on every full sync --- */
+#include <stdio.h>
+struct rdpstat_t {
+    unsigned frame, tris, tris_cycle[4], rects, fillrects, tmem_loads;
+    unsigned fbwrite, fbfill, fbread, zread, zwrite;
+};
+static struct rdpstat_t rdpstat;
+unsigned rspstat_imem_dma = 0;
+static void rdpstat_report(void);
 static void render_spans_1cycle_complete(int start, int end, int tilenum, int flip);
 static void render_spans_1cycle_notexel1(int start, int end, int tilenum, int flip);
 static void render_spans_1cycle_notex(int start, int end, int tilenum, int flip);
@@ -6844,6 +6854,7 @@ static void rdp_noop(uint32_t w1, uint32_t w2)
 
 static void rdp_tri_noshade(uint32_t w1, uint32_t w2)
 {
+	rdpstat.tris++; rdpstat.tris_cycle[other_modes.cycle_type & 3]++;
 	int32_t ewdata[44];
 	memcpy(&ewdata[0], &rdp_cmd_data[rdp_cmd_cur], 8 * sizeof(int32_t));
 	memset(&ewdata[8], 0, 36 * sizeof(int32_t));
@@ -6852,6 +6863,7 @@ static void rdp_tri_noshade(uint32_t w1, uint32_t w2)
 
 static void rdp_tri_noshade_z(uint32_t w1, uint32_t w2)
 {
+	rdpstat.tris++; rdpstat.tris_cycle[other_modes.cycle_type & 3]++;
 	int32_t ewdata[44];
 	memcpy(&ewdata[0], &rdp_cmd_data[rdp_cmd_cur], 8 * sizeof(int32_t));
 	memset(&ewdata[8], 0, 32 * sizeof(int32_t));
@@ -6861,6 +6873,7 @@ static void rdp_tri_noshade_z(uint32_t w1, uint32_t w2)
 
 static void rdp_tri_tex(uint32_t w1, uint32_t w2)
 {
+	rdpstat.tris++; rdpstat.tris_cycle[other_modes.cycle_type & 3]++;
 	int32_t ewdata[44];
 	memcpy(&ewdata[0], &rdp_cmd_data[rdp_cmd_cur], 8 * sizeof(int32_t));
 	memset(&ewdata[8], 0, 16 * sizeof(int32_t));
@@ -6871,6 +6884,7 @@ static void rdp_tri_tex(uint32_t w1, uint32_t w2)
 
 static void rdp_tri_tex_z(uint32_t w1, uint32_t w2)
 {
+	rdpstat.tris++; rdpstat.tris_cycle[other_modes.cycle_type & 3]++;
 	int32_t ewdata[44];
 	memcpy(&ewdata[0], &rdp_cmd_data[rdp_cmd_cur], 8 * sizeof(int32_t));
 	memset(&ewdata[8], 0, 16 * sizeof(int32_t));
@@ -6881,6 +6895,7 @@ static void rdp_tri_tex_z(uint32_t w1, uint32_t w2)
 
 static void rdp_tri_shade(uint32_t w1, uint32_t w2)
 {
+	rdpstat.tris++; rdpstat.tris_cycle[other_modes.cycle_type & 3]++;
 	int32_t ewdata[44];
 	memcpy(&ewdata[0], &rdp_cmd_data[rdp_cmd_cur], 24 * sizeof(int32_t));
 	memset(&ewdata[24], 0, 20 * sizeof(int32_t));
@@ -6889,6 +6904,7 @@ static void rdp_tri_shade(uint32_t w1, uint32_t w2)
 
 static void rdp_tri_shade_z(uint32_t w1, uint32_t w2)
 {
+	rdpstat.tris++; rdpstat.tris_cycle[other_modes.cycle_type & 3]++;
 	int32_t ewdata[44];
 	memcpy(&ewdata[0], &rdp_cmd_data[rdp_cmd_cur], 24 * sizeof(int32_t));
 	memset(&ewdata[24], 0, 16 * sizeof(int32_t));
@@ -6898,6 +6914,7 @@ static void rdp_tri_shade_z(uint32_t w1, uint32_t w2)
 
 static void rdp_tri_texshade(uint32_t w1, uint32_t w2)
 {
+	rdpstat.tris++; rdpstat.tris_cycle[other_modes.cycle_type & 3]++;
 	int32_t ewdata[44];
 	memcpy(&ewdata[0], &rdp_cmd_data[rdp_cmd_cur], 40 * sizeof(int32_t));
 	memset(&ewdata[40], 0, 4 * sizeof(int32_t));
@@ -6906,6 +6923,7 @@ static void rdp_tri_texshade(uint32_t w1, uint32_t w2)
 
 static void rdp_tri_texshade_z(uint32_t w1, uint32_t w2)
 {
+	rdpstat.tris++; rdpstat.tris_cycle[other_modes.cycle_type & 3]++;
 	int32_t ewdata[44];
 	memcpy(&ewdata[0], &rdp_cmd_data[rdp_cmd_cur], 44 * sizeof(int32_t));
 	edgewalker_for_prims(ewdata);
@@ -6913,6 +6931,7 @@ static void rdp_tri_texshade_z(uint32_t w1, uint32_t w2)
 
 static void rdp_tex_rect(uint32_t w1, uint32_t w2)
 {
+	rdpstat.rects++;
 	uint32_t w3 = rdp_cmd_data[rdp_cmd_cur + 2];
 	uint32_t w4 = rdp_cmd_data[rdp_cmd_cur + 3];
 
@@ -6973,6 +6992,7 @@ static void rdp_tex_rect(uint32_t w1, uint32_t w2)
 
 static void rdp_tex_rect_flip(uint32_t w1, uint32_t w2)
 {
+	rdpstat.rects++;
 	uint32_t w3 = rdp_cmd_data[rdp_cmd_cur+2];
 	uint32_t w4 = rdp_cmd_data[rdp_cmd_cur+3];
 	
@@ -7046,8 +7066,96 @@ static void rdp_sync_tile(uint32_t w1, uint32_t w2)
 	
 }
 
+
+/* FNV-1a over the current 16-bit color image: a deterministic run must reproduce
+   the exact hash sequence, which makes this a pixel-exact regression check. */
+static unsigned rdpstat_fbhash(void)
+{
+	unsigned h = 2166136261u;
+	unsigned lines = clip.yl >> 2;
+	unsigned npix, base, i;
+	if (fb_size != PIXEL_SIZE_16BIT) return 0;
+	if (lines == 0 || lines > 480) lines = 240;
+	npix = (unsigned)fb_width * lines;
+	base = fb_address >> 1;
+	for (i = 0; i < npix; i++) {
+		unsigned idx = (base + i) & (RDRAM_MASK >> 1);
+		if (idx > idxlim16) break;
+		h = (h ^ (unsigned)rdram_16[idx]) * 16777619u;
+	}
+	return h;
+}
+
+#include <stdlib.h>
+static void rdpstat_dump_fb(void)
+{
+	/* CEN64_DUMP_FB="<dir>:<every>[:<from>:<to>]" */
+	static int inited = 0, every = 0; static unsigned from = 0, to = 0xffffffffu; static char dir[256];
+	const char *e;
+	if (!inited) {
+		inited = 1;
+		e = getenv("CEN64_DUMP_FB");
+		if (e) {
+			const char *c = strchr(e, ':');
+			if (c) {
+				size_t n = (size_t)(c - e); if (n > 255) n = 255; memcpy(dir, e, n); dir[n] = 0;
+				every = atoi(c + 1);
+				c = strchr(c + 1, ':'); if (c) { from = (unsigned)atoi(c + 1); c = strchr(c + 1, ':'); if (c) to = (unsigned)atoi(c + 1); }
+			}
+		}
+	}
+	if (every <= 0 || rdpstat.frame < from || rdpstat.frame > to || (rdpstat.frame % (unsigned)every) != 0 || fb_size != PIXEL_SIZE_16BIT) return;
+	{
+		unsigned lines = clip.yl >> 2; unsigned w = (unsigned)fb_width, x, y;
+		char path[300]; FILE *f;
+		if (lines == 0 || lines > 480) lines = 240;
+		snprintf(path, sizeof path, "%s/fb_%06u.ppm", dir, rdpstat.frame);
+		f = fopen(path, "wb"); if (!f) return;
+		fprintf(f, "P6\n%u %u\n255\n", w, lines);
+		for (y = 0; y < lines; y++) for (x = 0; x < w; x++) {
+			unsigned idx = ((fb_address >> 1) + y * w + x) & (RDRAM_MASK >> 1);
+			unsigned px = idx <= idxlim16 ? byteswap_16(rdram_16[idx]) : 0;   /* RGBA5551 (RDRAM words are stored swapped) */
+			unsigned char rgb[3] = { (px >> 11) << 3, ((px >> 6) & 31) << 3, ((px >> 1) & 31) << 3 };
+			fwrite(rgb, 1, 3, f);
+		}
+		fclose(f);
+	}
+}
+
+/* CEN64_DUMP_CMD="<from>:<to>": print every RDP command of frames from..to as
+   CMD,<frame>,<hex words...> (triangle commands included, for diffing RSP output). */
+static void rdpstat_log_cmd(uint32_t cmd, uint32_t cmd_length)
+{
+	static int inited = 0; static unsigned from = 1, to = 0; const char *e; uint32_t i;
+	if (!inited) {
+		inited = 1; e = getenv("CEN64_DUMP_CMD");
+		if (e) { from = (unsigned)atoi(e); e = strchr(e, ':'); if (e) to = (unsigned)atoi(e + 1); }
+	}
+	if (rdpstat.frame < from || rdpstat.frame > to) return;
+	printf("CMD,%u,%02x", rdpstat.frame, cmd);
+	for (i = 0; i < cmd_length; i++) printf(",%08x", rdp_cmd_data[rdp_cmd_cur + i]);
+	printf("\n");
+}
+
+static void rdpstat_report(void)
+{
+	rdpstat_dump_fb();
+	printf("RDP,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%08x,%u\n",
+	       rdpstat.frame, rdpstat.tris, rdpstat.tris_cycle[0], rdpstat.tris_cycle[1],
+	       rdpstat.tris_cycle[2], rdpstat.tris_cycle[3], rdpstat.rects, rdpstat.fillrects,
+	       rdpstat.tmem_loads, rdpstat.fbwrite, rdpstat.fbfill, rdpstat.fbread,
+	       rdpstat.zread, rdpstat.zwrite, rdpstat_fbhash(), rspstat_imem_dma);
+	rspstat_imem_dma = 0;
+	fflush(stdout);
+	rdpstat.frame++;
+	rdpstat.tris = rdpstat.rects = rdpstat.fillrects = rdpstat.tmem_loads = 0;
+	rdpstat.tris_cycle[0] = rdpstat.tris_cycle[1] = rdpstat.tris_cycle[2] = rdpstat.tris_cycle[3] = 0;
+	rdpstat.fbwrite = rdpstat.fbfill = rdpstat.fbread = rdpstat.zread = rdpstat.zwrite = 0;
+}
+
 static void rdp_sync_full(uint32_t w1, uint32_t w2)
 {
+	rdpstat_report();
 	
 	
 
@@ -7287,6 +7395,7 @@ static void rdp_set_tile_size(uint32_t w1, uint32_t w2)
 	
 static void rdp_load_block(uint32_t w1, uint32_t w2)
 {
+	rdpstat.tmem_loads++;
 	int tilenum = (w2 >> 24) & 0x7;
 	int sl, sh, tl, dxt;
 						
@@ -7319,6 +7428,7 @@ static void rdp_load_block(uint32_t w1, uint32_t w2)
 
 static void rdp_load_tlut(uint32_t w1, uint32_t w2)
 {
+	rdpstat.tmem_loads++;
 	
 
 	tile_tlut_common_cs_decoder(w1, w2);
@@ -7326,6 +7436,7 @@ static void rdp_load_tlut(uint32_t w1, uint32_t w2)
 
 static void rdp_load_tile(uint32_t w1, uint32_t w2)
 {
+	rdpstat.tmem_loads++;
 	tile_tlut_common_cs_decoder(w1, w2);
 }
 
@@ -7382,6 +7493,7 @@ static void rdp_set_tile(uint32_t w1, uint32_t w2)
 
 static void rdp_fill_rect(uint32_t w1, uint32_t w2)
 {
+	rdpstat.fillrects++;
 	uint32_t xl = (w1 >> 12) & 0xfff;
 	uint32_t yl = (w1 >>  0) & 0xfff;
 	uint32_t xh = (w2 >> 12) & 0xfff;
@@ -7652,6 +7764,7 @@ void rdp_process_list(void)
 		
 
 		
+		rdpstat_log_cmd(cmd, cmd_length);
 		rdp_command_table[cmd](rdp_cmd_data[rdp_cmd_cur+0], rdp_cmd_data[rdp_cmd_cur + 1]);
 		
 		rdp_cmd_cur += cmd_length;
@@ -7960,6 +8073,7 @@ static void fbwrite_8(uint32_t curpixel, uint32_t r, uint32_t g, uint32_t b, uin
 
 static void fbwrite_16(uint32_t curpixel, uint32_t r, uint32_t g, uint32_t b, uint32_t blend_en, uint32_t curpixel_cvg, uint32_t curpixel_memcvg)
 {
+	rdpstat.fbwrite++;
 #undef CVG_DRAW
 #ifdef CVG_DRAW
 	int covdraw = (curpixel_cvg - 1) << 5;
@@ -8018,6 +8132,7 @@ static void fbfill_8(uint32_t curpixel)
 
 static void fbfill_16(uint32_t curpixel)
 {
+	rdpstat.fbfill++;
 	uint16_t val;
 	uint8_t hval;
 	uint32_t fb = (fb_address >> 1) + curpixel;
@@ -8072,6 +8187,7 @@ static void fbread2_8(uint32_t curpixel, uint32_t* curpixel_memcvg)
 
 static void fbread_16(uint32_t curpixel, uint32_t* curpixel_memcvg)
 {
+	rdpstat.fbread++;
 	uint16_t fword;
 	uint8_t hbyte;
 	uint32_t addr = (fb_address >> 1) + curpixel;
@@ -8119,6 +8235,7 @@ static void fbread_16(uint32_t curpixel, uint32_t* curpixel_memcvg)
 
 static void fbread2_16(uint32_t curpixel, uint32_t* curpixel_memcvg)
 {
+	rdpstat.fbread++;
 	uint16_t fword;
 	uint8_t hbyte;
 	uint32_t addr = (fb_address >> 1) + curpixel;
@@ -8422,6 +8539,7 @@ static inline void lookup_cvmask_derivatives(uint32_t mask, uint8_t* offx, uint8
 
 static inline void z_store(uint32_t zcurpixel, uint32_t z, int dzpixenc)
 {
+	rdpstat.zwrite++;
 	uint16_t zval = z_com_table[z & 0x3ffff]|(dzpixenc >> 2);
 	uint8_t hval = dzpixenc & 3;
 	PAIRWRITE16(zcurpixel, zval, hval);
@@ -8448,6 +8566,7 @@ static inline uint32_t dz_compress(uint32_t value)
 
 static inline uint32_t z_compare(uint32_t zcurpixel, uint32_t sz, uint16_t dzpix, int dzpixenc, uint32_t* blend_en, uint32_t* prewrap, uint32_t* curpixel_cvg, uint32_t curpixel_memcvg)
 {
+	rdpstat.zread++;
 
 
 	int force_coplanar = 0;

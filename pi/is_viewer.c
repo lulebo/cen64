@@ -3,6 +3,37 @@
 
 #include "common.h"
 #include "is_viewer.h"
+#include <stdio.h>
+
+extern uint64_t *g_vr4300_profile_samples;
+
+/* CEN64_PROFILE_DIR: per-benchmark-scenario CPU profiles (see vr4300/cpu.c). */
+static void profile_window(const char *line) {
+  static int inited = 0; static const char *dir = NULL;
+  const size_t n = 8 * 1024 * 1024;
+  if (!inited) { inited = 1; dir = getenv("CEN64_PROFILE_DIR"); }
+  if (dir == NULL || g_vr4300_profile_samples == NULL) return;
+  if (!strncmp(line, "BENCH_START,", 12)) {
+    memset(g_vr4300_profile_samples, 0, 4 * n * sizeof(uint64_t));
+  } else if (!strncmp(line, "BENCH_END,", 10)) {
+    char name[64], path[512]; size_t i, k = 0; FILE *f;
+    const char *p = line + 10;
+    while (*p && *p != ',' && *p != '\n' && k < sizeof(name) - 1) name[k++] = *p++;
+    name[k] = 0;
+    snprintf(path, sizeof(path), "%s/%s.profile", dir, name);
+    f = fopen(path, "w");
+    if (f == NULL) return;
+    for (i = 0; i < n; i++) {
+      uint64_t ins = g_vr4300_profile_samples[i], l1d = g_vr4300_profile_samples[i + n],
+               cyc = g_vr4300_profile_samples[i + 2 * n], ic = g_vr4300_profile_samples[i + 3 * n];
+      if (cyc < 20 && ins < 20 && l1d < 20 && ic < 20) continue;
+      fprintf(f, "%x %llu %llu %llu %llu\n", (unsigned) (i + 0x80000000),
+              (unsigned long long) ins, (unsigned long long) l1d, (unsigned long long) cyc,
+              (unsigned long long) ic);
+    }
+    fclose(f);
+  }
+}
 
 // Minus text buffer base offset, plus NULL terminator
 #define IS_BUFFER_SIZE IS_VIEWER_ADDRESS_LEN - 0x20 + 1
@@ -62,6 +93,7 @@ int write_is_viewer(struct is_viewer *is, uint32_t address, uint32_t word, uint3
         memset(is->output_buffer_conv, 0, IS_BUFFER_SIZE * 3);
         iconv(is->cd, &inptr, &len, &outptr, &outlen);
 
+        profile_window((const char *) is->output_buffer_conv);
         if (is->show_output)
           printf("%s", is->output_buffer_conv);
         else if (!is->output_warning) {
