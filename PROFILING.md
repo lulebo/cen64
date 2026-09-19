@@ -1,8 +1,8 @@
 # cen64 profiling / benchmarking extras
 
-This branch adds headless measurement hooks used to optimize Super Mario 64 for real N64
-hardware (see https://github.com/lulebo — the SM64 work lives in a separate repo). Everything is
-opt-in through command-line flags and environment variables; default behaviour is unchanged.
+This branch adds headless measurement hooks for profiling and benchmarking N64 code.
+Everything is opt-in through command-line flags and environment variables; default behaviour
+is unchanged.
 
 ## Headless runs
 - `-headless` now blocks until the emulated device thread ends (upstream returned at once),
@@ -34,10 +34,10 @@ RDP execution *time*; these are work counts.
 `CEN64_PROFILE_DIR=<dir>` resets the counters when the ROM prints an IS-Viewer line starting
 with `BENCH_START,` and writes `<dir>/<name>.profile` on `BENCH_END,<name>,...`, one line per
 address: `pc instructions l1d_misses cycles icache_misses`. Aggregate by function with the
-ELF symbol table (the SM64 repo has `tools/bench/profile_syms.py`). Without the environment
+ELF symbol table (`nm -n` and a nearest-preceding-symbol lookup). Without the environment
 variable, upstream's `<rom>.profile` at exit still works. Profiling slows emulation by
 roughly a third.
 
 The N64's I-cache is 16 KB direct-mapped: functions whose addresses are equal modulo 16 KB
-evict each other on every call. The I-cache column made that visible per function and drove
-a linker-level code placement that cut the game's render-time CPU cost by 7-16%.
+evict each other on every call. The I-cache column makes that visible per function, which
+is what you need to decide a linker-level code placement.
