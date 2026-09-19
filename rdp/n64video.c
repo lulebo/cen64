@@ -536,7 +536,7 @@ static void read_tmem_copy(int s, int s1, int s2, int s3, int t, uint32_t tilenu
 static void replicate_for_copy(uint32_t* outbyte, uint32_t inshort, uint32_t nybbleoffset, uint32_t tilenum, uint32_t tformat, uint32_t tsize);
 static void fetch_qword_copy(uint32_t* hidword, uint32_t* lowdword, int32_t ssss, int32_t ssst, uint32_t tilenum);
 
-/* --- RDP work counters (SMOptimize): reported on every full sync --- */
+/* --- RDP work counters: reported on every full sync --- */
 #include <stdio.h>
 struct rdpstat_t {
     unsigned frame, tris, tris_cycle[4], rects, fillrects, tmem_loads;
