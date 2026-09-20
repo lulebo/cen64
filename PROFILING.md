@@ -91,14 +91,16 @@ visible side effects lag behind it:
   END_VALID (a transfer queued behind the running one) and the busy bits; a DPC_START
   written while busy is taken when the running transfer has drained, as on hardware.
 - The DP interrupt of a full sync fires when the model reaches it.
-- `RDPT,<frame>,<cycles>,<px 1-cycle>,<px 2-cycle>,<px fill>,<px copy>,<z pixels>,<tris>,<cmds>,<tmem loads>`
+- `RDPT,<frame>,<cycles>,<px 1-cycle>,<px 2-cycle>,<px fill>,<px copy>,<z pixels>,<tris>,<cmds>,<tmem loads>,<spans>,<spans with image read>,<spans with z compare>`
   is printed with every `RDP,` line: the modelled busy cycles of the frame and the work
-  behind them.
+  behind them. A span is one valid scanline of one primitive; an FPGA RDP (MiSTer) fetches
+  the framebuffer line (image read on) and then the z line (z compare on) from DDR3 at the
+  start of every span, sequentially, before it draws a pixel, so spans are a cost of their own.
 
 Cost per command = cmd + tri/rect/tmem overhead + pixels * per-mode cost + z pixels * z cost,
 with pixels = max(colour writes, z reads) of that command (so z-rejected pixels count).
-`-rdpmodel px1,px2,fill,copy,z,tri,rect,cmd,tmem` sets the cycle costs (defaults
-`1,2,0.25,0.25,0.5,64,32,8,256`); `CEN64_RDP_MODEL` in the environment does the same.
+`-rdpmodel px1,px2,fill,copy,z,tri,rect,cmd,tmem[,sync,span,spanfb,spanz]` sets the cycle costs (defaults
+`1,2,0.25,0.25,0.5,64,32,8,256,200,0,0,0`; span = per span, spanfb / spanz = extra per span with image read / z compare); `CEN64_RDP_MODEL` in the environment does the same.
 These are guesses to be calibrated against hardware (the ROM's HWSTATS line prints the
 RDP tail after the RSP, `P`, and the RSP idle share, `I`).
 
