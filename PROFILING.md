@@ -67,3 +67,12 @@ Not validated against hardware: use it for relative comparisons between microcod
 display lists, and confirm on a console. `RSPHW,instructions,pairs,stallcycles,branches`
 is printed on stdout at every `BENCH_END,` IS-Viewer line (counters reset at
 `BENCH_START,`), and a summary goes to stderr at exit.
+
+## RSP program-counter profile (`-rspprof`)
+
+Cycles per IMEM word, one histogram per microcode (keyed by the OSTask ucode address
+read from DMEM when the RSP is started). With `CEN64_PROFILE_DIR` set, each `BENCH_END,`
+IS-Viewer line writes `<name>.rspprof` (`ucode pc cycles`, reset at `BENCH_START,`).
+Under `-rsphw` the credit cost of each instruction is attributed. Symbolise with an
+armips `-sym` file of the microcode (e.g. Wiseguy's F3DEX2 build, or a hand-made list of
+the audio ucode's command handlers from its dispatch table).

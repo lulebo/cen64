@@ -91,6 +91,7 @@ int cen64_main(int argc, const char **argv) {
   }
 
   g_rsp_hw_timing = options.rsp_hw_timing;
+  g_rsp_profile = options.rsp_profile;
 
   memset(&ddipl, 0, sizeof(ddipl));
   memset(&ddrom, 0, sizeof(ddrom));

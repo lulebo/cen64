@@ -223,6 +223,8 @@ static inline bool rsp_wb_stage(struct rsp *rsp) {
 void rsp_cycle_(struct rsp *rsp) {
   if (unlikely(!rsp_wb_stage(rsp)))
     return;
+  if (!rsp->hw.enabled)
+    rsp_prof_add(rsp, rsp->pipeline.rdex_latch.common.pc, 1);
   rsp_df_stage(rsp);
 
   rsp->pipeline.exdf_latch.result.dest = RSP_REGISTER_R0;
@@ -435,6 +437,7 @@ void rsp_cycle_hw(struct rsp *rsp) {
     if (cost > hw->credit)
       return;
     hw->credit -= cost;
+    rsp_prof_add(rsp, rsp->pipeline.rdex_latch.common.pc, cost);
     rsp_hw_commit(rsp);
     rsp_cycle_(rsp);
     // Loop on: a dual-issued partner or a load-use bubble costs 0 and runs in

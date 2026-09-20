@@ -104,6 +104,7 @@ void rsp_status_write(struct rsp *rsp, uint32_t rt) {
       uint32_t pc = rsp->pipeline.rdex_latch.common.pc;
       rsp_pipeline_init(&rsp->pipeline);
       rsp->pipeline.ifrd_latch.pc = pc;
+      rsp_prof_task_start(rsp);
 
       status &= ~SP_STATUS_HALT;
     }

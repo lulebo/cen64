@@ -24,6 +24,29 @@ static void profile_window(const char *line) {
              (unsigned long long) hw->n_branch);
     }
   }
+  if (dir != NULL && g_rsp_prof != NULL && g_rsp_prof->enabled) {
+    if (!strncmp(line, "BENCH_START,", 12)) {
+      memset(g_rsp_prof->cycles, 0, sizeof(g_rsp_prof->cycles));
+    } else if (!strncmp(line, "BENCH_END,", 10)) {
+      char name[64], path[512]; size_t k = 0; int b, i; FILE *f;
+      const char *p = line + 10;
+      while (*p && *p != ',' && *p != '\n' && k < sizeof(name) - 1) name[k++] = *p++;
+      name[k] = 0;
+      snprintf(path, sizeof(path), "%s/%s.rspprof", dir, name);
+      f = fopen(path, "w");
+      if (f != NULL) {
+        for (b = 0; b < RSP_PROF_UCODES; b++) {
+          if (g_rsp_prof->ucode[b] == 0) continue;
+          for (i = 0; i < 0x400; i++) {
+            if (g_rsp_prof->cycles[b][i] != 0)
+              fprintf(f, "%x %x %llu\n", (unsigned) g_rsp_prof->ucode[b], (unsigned) (i * 4),
+                      (unsigned long long) g_rsp_prof->cycles[b][i]);
+          }
+        }
+        fclose(f);
+      }
+    }
+  }
   if (dir == NULL || g_vr4300_profile_samples == NULL) return;
   if (!strncmp(line, "BENCH_START,", 12)) {
     memset(g_vr4300_profile_samples, 0, 4 * n * sizeof(uint64_t));

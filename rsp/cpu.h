@@ -72,6 +72,17 @@ struct rsp_hwtiming {
   uint64_t n_insn, n_pair, n_stall, n_branch;
 };
 extern bool g_rsp_hw_timing;
+extern bool g_rsp_profile;
+
+// -rspprof: cycles per IMEM word, one bucket per microcode (OSTask.ucode address).
+#define RSP_PROF_UCODES 4
+struct rsp_prof {
+  bool enabled;
+  int cur;                              // bucket of the running task, -1 none
+  uint32_t ucode[RSP_PROF_UCODES];
+  uint64_t cycles[RSP_PROF_UCODES][0x400];
+};
+extern struct rsp_prof *g_rsp_prof;
 extern struct rsp_hwtiming *g_rsp_hw_stats;
 
 struct rsp {
@@ -92,7 +103,14 @@ struct rsp {
 
   // -rsphw timing model state; last so that mem[] keeps its 16-byte alignment.
   struct rsp_hwtiming hw;
+  struct rsp_prof prof;
 };
+
+cen64_hot static inline void rsp_prof_add(struct rsp *rsp, uint32_t pc, unsigned cycles) {
+  if (rsp->prof.enabled && rsp->prof.cur >= 0)
+    rsp->prof.cycles[rsp->prof.cur][(pc >> 2) & 0x3FF] += cycles;
+}
+cen64_cold void rsp_prof_task_start(struct rsp *rsp);
 
 cen64_cold int rsp_init(struct rsp *rsp, struct bus_controller *bus);
 cen64_cold void rsp_late_init(struct rsp *rsp);
