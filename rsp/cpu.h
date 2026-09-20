@@ -121,9 +121,17 @@ cen64_flatten cen64_hot void rsp_cycle_(struct rsp *rsp);
 cen64_hot void rsp_cycle_hw(struct rsp *rsp);
 cen64_cold void rsp_hw_print_stats(const struct rsp *rsp);
 
+// -rspslow N: one stall cycle every N cycles (models a slower RSP, e.g. an FPGA core).
+extern unsigned g_rsp_slow;
+extern unsigned g_rsp_slow_ctr;
+
 cen64_flatten cen64_hot static inline void rsp_cycle(struct rsp *rsp) {
   if (unlikely(rsp->regs[RSP_CP0_REGISTER_SP_STATUS] & SP_STATUS_HALT))
     return;
+  if (g_rsp_slow && ++g_rsp_slow_ctr >= g_rsp_slow) {
+    g_rsp_slow_ctr = 0;
+    return;
+  }
 
   if (rsp->hw.enabled)
     rsp_cycle_hw(rsp);

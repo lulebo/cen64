@@ -160,7 +160,8 @@ static struct cen64_device *cen64;
 
 #define dp_start (cen64->rdp.regs[DPC_START_REG])
 #define dp_end (cen64->rdp.regs[DPC_END_REG])
-#define dp_current (cen64->rdp.regs[DPC_CURRENT_REG])
+#define dp_current (cen64->rdp.exec_current)
+#define dp_current_reg (cen64->rdp.regs[DPC_CURRENT_REG])
 #define dp_status (cen64->rdp.regs[DPC_STATUS_REG])
 
 #define SIGN16(x)	((int16_t)(x))
@@ -7145,6 +7146,13 @@ static void rdpstat_report(void)
 	       rdpstat.tris_cycle[2], rdpstat.tris_cycle[3], rdpstat.rects, rdpstat.fillrects,
 	       rdpstat.tmem_loads, rdpstat.fbwrite, rdpstat.fbfill, rdpstat.fbread,
 	       rdpstat.zread, rdpstat.zwrite, rdpstat_fbhash(), rspstat_imem_dma);
+	if (cen64->rdp.timing.on) {
+		struct rdp_timing *t = &cen64->rdp.timing;
+		printf("RDPT,%u,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu\n", rdpstat.frame, (unsigned long long) t->stat_busy_frame,
+		       (unsigned long long) t->fpx1, (unsigned long long) t->fpx2, (unsigned long long) t->fpxfill, (unsigned long long) t->fpxcopy,
+		       (unsigned long long) t->fpxz, (unsigned long long) t->ftri, (unsigned long long) t->fcmd, (unsigned long long) t->ftmem);
+		t->stat_busy_frame = t->fpx1 = t->fpx2 = t->fpxfill = t->fpxcopy = t->fpxz = t->ftri = t->fcmd = t->ftmem = 0;
+	}
 	rspstat_imem_dma = 0;
 	fflush(stdout);
 	rdpstat.frame++;
@@ -7182,7 +7190,8 @@ static void rdp_sync_full(uint32_t w1, uint32_t w2)
 
 	z64gl_command = 0;
 
-  signal_rcp_interrupt(cen64->bus.vr4300, MI_INTR_DP);
+  if (!cen64->rdp.timing.on)
+    signal_rcp_interrupt(cen64->bus.vr4300, MI_INTR_DP);
 }
 
 static void rdp_set_key_gb(uint32_t w1, uint32_t w2)
@@ -7657,6 +7666,50 @@ static void (*const rdp_command_table[64])(uint32_t w1, uint32_t w2) =
 	rdp_set_combine,	rdp_set_texture_image,	rdp_set_mask_image,		rdp_set_color_image
 };
 
+// -rdptime: charge one executed command to the modelled RDP clock.
+static void rdp_timing_account(uint32_t cmd, uint32_t addr, uint32_t len, const struct rdpstat_t *b)
+{
+	struct rdp_timing *t = &cen64->rdp.timing;
+	struct rdp_timing_entry *e;
+	// (the full sync resets the counters in its report: no pixels to charge)
+	unsigned px_w = cmd == 0x29 ? 0 : (rdpstat.fbwrite - b->fbwrite) + (rdpstat.fbfill - b->fbfill);
+	unsigned px_z = cmd == 0x29 ? 0 : rdpstat.zread - b->zread;
+	unsigned px = px_w > px_z ? px_w : px_z;
+	double cost = t->ccmd;
+	uint64_t start;
+	t->fcmd++;
+	if (cmd >= 8 && cmd <= 15) { cost += t->ctri; t->ftri++; }
+	else if (cmd == 0x24 || cmd == 0x25 || cmd == 0x36) cost += t->crect;
+	else if (cmd == 0x30 || cmd == 0x33 || cmd == 0x34) { cost += t->ctmem; t->ftmem++; }
+	switch (other_modes.cycle_type & 3) {
+		case CYCLE_TYPE_1: cost += px * t->c1; t->fpx1 += px; break;
+		case CYCLE_TYPE_2: cost += px * t->c2; t->fpx2 += px; break;
+		case CYCLE_TYPE_COPY: cost += px * t->ccopy; t->fpxcopy += px; break;
+		default: cost += px * t->cfill; t->fpxfill += px; break;
+	}
+	cost += px_z * t->cz; t->fpxz += px_z;
+	// A full sync drains the pipe before it raises the interrupt, and a command
+	// the RDP fetches after having been idle pays the RDRAM latency first: the
+	// DP interrupt must never precede the RSP's own completion (hardware order).
+	if (cmd == 0x29) cost += 200;
+	if (t->busy_until <= t->now) cost += 64;
+	if (cost < 1) cost = 1;
+	start = t->busy_until > t->now ? t->busy_until : t->now;
+	t->busy_until = start + (uint64_t) cost;
+	t->stat_busy += (uint64_t) cost;
+	t->stat_busy_frame += (uint64_t) cost;
+	if (((t->tail + 1) & (RDP_TIMING_RING - 1)) == t->head) {
+		t->now = t->ring[t->head].finish; // ring full (cannot happen at frame sizes): let the oldest finish
+		rdp_timing_advance(&cen64->rdp);
+	}
+	e = &t->ring[t->tail];
+	e->cur = addr;
+	e->next = addr + len;
+	e->finish = t->busy_until;
+	e->kind = cmd == 0x29 ? 2 : 0;
+	t->tail = (t->tail + 1) & (RDP_TIMING_RING - 1);
+}
+
 void rdp_process_list(void)
 {
 	int i, length;
@@ -7697,6 +7750,7 @@ void rdp_process_list(void)
 	{
 
 	int toload = remaining_length > 0x10000 ? 0x10000 : remaining_length;
+	uint32_t chunk_word = dp_current_al; // RDRAM word address of rdp_cmd_data[ptr_onstart]
 
 
 	if (dp_status & DP_STATUS_XBUS_DMA)
@@ -7735,6 +7789,7 @@ void rdp_process_list(void)
 				dp_start &= 0x00FFFFFF;
 				dp_end &= 0x00FFFFFF;
 				dp_current = dp_end;
+				if (!cen64->rdp.timing.on || cen64->rdp.timing.head == cen64->rdp.timing.tail) dp_current_reg = dp_end;
 				return;
 			}
 			else
@@ -7765,6 +7820,12 @@ void rdp_process_list(void)
 
 		
 		rdpstat_log_cmd(cmd, cmd_length);
+		if (cen64->rdp.timing.on) {
+			struct rdpstat_t before = rdpstat;
+			uint32_t addr = (chunk_word + (rdp_cmd_cur > ptr_onstart ? rdp_cmd_cur - ptr_onstart : 0)) << 2;
+			rdp_command_table[cmd](rdp_cmd_data[rdp_cmd_cur+0], rdp_cmd_data[rdp_cmd_cur + 1]);
+			rdp_timing_account(cmd, addr, cmd_length << 2, &before);
+		} else
 		rdp_command_table[cmd](rdp_cmd_data[rdp_cmd_cur+0], rdp_cmd_data[rdp_cmd_cur + 1]);
 		
 		rdp_cmd_cur += cmd_length;
@@ -7776,6 +7837,7 @@ void rdp_process_list(void)
 	dp_start &= 0x00FFFFFF;
 	dp_end &= 0x00FFFFFF;
 	dp_current = dp_end;
+	if (!cen64->rdp.timing.on || cen64->rdp.timing.head == cen64->rdp.timing.tail) dp_current_reg = dp_end;
 	dp_status |= DP_STATUS_CBUF_READY;
 
 

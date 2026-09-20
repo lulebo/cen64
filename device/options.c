@@ -33,6 +33,9 @@ const struct cen64_options default_cen64_options = {
   false, // enable_debugger
   false, // enable_profiling
   false, // rsp_hw_timing
+  false, // rdp_timing
+  0,     // rsp_slow
+  NULL,  // rdp_model
   false, // rsp_profile
   false, // multithread
   false, // no_audio
@@ -58,6 +61,24 @@ int parse_options(struct cen64_options *options, int argc, const char *argv[]) {
 
     else if (!strcmp(argv[i], "-rsphw"))
       options->rsp_hw_timing = true;
+
+    else if (!strcmp(argv[i], "-rdptime"))
+      options->rdp_timing = true;
+
+    else if (!strcmp(argv[i], "-rspslow")) {
+      if ((i + 1) >= argc)
+        return 1;
+      options->rsp_slow = (unsigned) atoi(argv[++i]);
+    }
+
+    else if (!strcmp(argv[i], "-rdpmodel")) {
+      if ((i + 1) >= argc) {
+        printf("-rdpmodel requires px1,px2,fill,copy,z,tri,rect,cmd,tmem cycles.\n\n");
+        return 1;
+      }
+      options->rdp_timing = true;
+      options->rdp_model = argv[++i];
+    }
 
     else if (!strcmp(argv[i], "-rspprof"))
       options->rsp_profile = true;

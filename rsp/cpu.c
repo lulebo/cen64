@@ -12,6 +12,8 @@
 #include "rsp/cpu.h"
 #include <string.h>
 
+unsigned g_rsp_slow = 0;
+unsigned g_rsp_slow_ctr = 0;
 bool g_rsp_hw_timing = false;
 struct rsp_hwtiming *g_rsp_hw_stats = NULL; // for the IS-Viewer profile windows
 bool g_rsp_profile = false;

@@ -202,6 +202,7 @@ CEN64_THREAD_RETURN_TYPE run_rcp_thread(void *opaque) {
 
     for (i = 0; i < 6250; i++) {
       rsp_cycle(&device->rsp);
+      rdp_timing_tick(&device->rdp);
       vi_cycle(&device->vi);
     }
 
@@ -304,6 +305,7 @@ int device_spin(struct cen64_device *device) {
     for (i = 0; i < 2; i++) {
       vr4300_cycle(device->vr4300);
       rsp_cycle(&device->rsp);
+      rdp_timing_tick(&device->rdp);
       ai_cycle(&device->ai);
       pi_cycle(&device->pi);
       vi_cycle(&device->vi);
@@ -333,6 +335,7 @@ int device_debug_spin(struct cen64_device *device) {
     for (i = 0; i < 2; i++) {
       vr4300_cycle(device->vr4300);
       rsp_cycle(&device->rsp);
+      rdp_timing_tick(&device->rdp);
       ai_cycle(&device->ai);
       pi_cycle(&device->pi);
       vi_cycle(&device->vi);

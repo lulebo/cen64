@@ -76,3 +76,35 @@ IS-Viewer line writes `<name>.rspprof` (`ucode pc cycles`, reset at `BENCH_START
 Under `-rsphw` the credit cost of each instruction is attributed. Symbolise with an
 armips `-sym` file of the microcode (e.g. Wiseguy's F3DEX2 build, or a hand-made list of
 the audio ucode's command handlers from its dispatch table).
+
+## RDP timing model (`-rdptime`, `-rdpmodel`) and a slower RSP (`-rspslow`)
+
+Stock cen64 renders every RDP command the moment `DPC_END` is written and raises the DP
+interrupt immediately, so the RDP is infinitely fast: the RSP never waits on a full FIFO,
+the game never sees an RDP tail after the RSP finished, and frame pacing that depends on
+that (60 fps pipelines) cannot be judged. `-rdptime` keeps the immediate execution (pixels
+are unchanged) but charges every command to a modelled RDP clock (62.5 MHz) and lets the
+visible side effects lag behind it:
+
+- `DPC_CURRENT` reads back the address of the command the modelled RDP is executing;
+  `DPC_STATUS` shows START_VALID (a DPC_START latched but not yet taken by a DPC_END),
+  END_VALID (a transfer queued behind the running one) and the busy bits; a DPC_START
+  written while busy is taken when the running transfer has drained, as on hardware.
+- The DP interrupt of a full sync fires when the model reaches it.
+- `RDPT,<frame>,<cycles>,<px 1-cycle>,<px 2-cycle>,<px fill>,<px copy>,<z pixels>,<tris>,<cmds>,<tmem loads>`
+  is printed with every `RDP,` line: the modelled busy cycles of the frame and the work
+  behind them.
+
+Cost per command = cmd + tri/rect/tmem overhead + pixels * per-mode cost + z pixels * z cost,
+with pixels = max(colour writes, z reads) of that command (so z-rejected pixels count).
+`-rdpmodel px1,px2,fill,copy,z,tri,rect,cmd,tmem` sets the cycle costs (defaults
+`1,2,0.25,0.25,0.5,64,32,8,256`); `CEN64_RDP_MODEL` in the environment does the same.
+These are guesses to be calibrated against hardware (the ROM's HWSTATS line prints the
+RDP tail after the RSP, `P`, and the RSP idle share, `I`).
+
+`-rspslow N` inserts one stall cycle every N RSP cycles (N=10 = an RSP 10% slower than
+cen64's), to reproduce the overloaded regime of a slower RSP implementation such as an FPGA
+core without editing the microcode.
+
+Ring size: 65536 commands in flight (about ten frames); the model forces the oldest to
+finish if it ever fills.

@@ -14,6 +14,7 @@
 #include "device/cart_db.h"
 #include "device/device.h"
 #include "device/options.h"
+#include "rdp/cpu.h"
 #include "rsp/cpu.h"
 #include "device/sha1.h"
 #include "device/sha1_sums.h"
@@ -91,6 +92,9 @@ int cen64_main(int argc, const char **argv) {
   }
 
   g_rsp_hw_timing = options.rsp_hw_timing;
+  g_rdp_timing = options.rdp_timing;
+  g_rsp_slow = options.rsp_slow;
+  g_rdp_model = options.rdp_model;
   g_rsp_profile = options.rsp_profile;
 
   memset(&ddipl, 0, sizeof(ddipl));
