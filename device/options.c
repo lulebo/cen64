@@ -32,6 +32,7 @@ const struct cen64_options default_cen64_options = {
   NULL, // controller
   false, // enable_debugger
   false, // enable_profiling
+  false, // rsp_hw_timing
   false, // multithread
   false, // no_audio
   false, // no_video
@@ -53,6 +54,9 @@ int parse_options(struct cen64_options *options, int argc, const char *argv[]) {
       else
         options->debugger_addr = "localhost:64646";
     }
+
+    else if (!strcmp(argv[i], "-rsphw"))
+      options->rsp_hw_timing = true;
 
     else if (!strcmp(argv[i], "-profile"))
       options->enable_profiling = true;

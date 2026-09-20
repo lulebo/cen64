@@ -41,3 +41,29 @@ roughly a third.
 The N64's I-cache is 16 KB direct-mapped: functions whose addresses are equal modulo 16 KB
 evict each other on every call. The I-cache column makes that visible per function, which
 is what you need to decide a linker-level code placement.
+
+## RSP issue timing model (`-rsphw`)
+
+The stock RSP pipeline issues one instruction per cycle. The real RSP dual-issues one
+scalar (SU) and one vector (VU) instruction per cycle and has register latencies that the
+stock model does not have, so hand-scheduled microcode (F3DEX2, F3DEX3) runs faster on the
+chip than in the emulator, and the difference is not uniform between microcodes.
+`-rsphw` layers an issue-timing model on the functional pipeline, following the rules
+documented at n64brew (Reality Signal Processor / CPU Pipeline):
+
+- SU + VU neighbours dual-issue, in either order, unless the first writes a vector
+  register the second reads or writes; a branch delay slot never dual-issues; the first
+  instruction at a taken branch's target pairs only when 8-byte aligned.
+- A vector register written by any instruction (VU op, vector load, `mtc2`) is readable
+  4 cycles later; a scalar register written by a DMEM load, `mfc0`, `mfc2` or `cfc2` after
+  3 cycles; readers stall until then.
+- A store (or any cop0/cop2 move) issued exactly 2 cycles after a load stalls 1 cycle.
+- Branches take 3 cycles including the delay slot.
+
+Each device cycle grants one credit; an instruction executes once `1 + stalls` credits are
+available, a dual-issued partner costs 0 and runs in the same device cycle. Everything else
+(DMA, RDP, interrupts) is unchanged, so the model only changes *when* instructions run.
+Not validated against hardware: use it for relative comparisons between microcodes or
+display lists, and confirm on a console. `RSPHW,instructions,pairs,stallcycles,branches`
+is printed on stdout at every `BENCH_END,` IS-Viewer line (counters reset at
+`BENCH_START,`), and a summary goes to stderr at exit.

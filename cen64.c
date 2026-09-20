@@ -14,6 +14,7 @@
 #include "device/cart_db.h"
 #include "device/device.h"
 #include "device/options.h"
+#include "rsp/cpu.h"
 #include "device/sha1.h"
 #include "device/sha1_sums.h"
 #include "gdb/gdb.h"
@@ -88,6 +89,8 @@ int cen64_main(int argc, const char **argv) {
     cen64_alloc_cleanup();
     return EXIT_FAILURE;
   }
+
+  g_rsp_hw_timing = options.rsp_hw_timing;
 
   memset(&ddipl, 0, sizeof(ddipl));
   memset(&ddrom, 0, sizeof(ddrom));

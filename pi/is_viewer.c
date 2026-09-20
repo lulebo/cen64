@@ -6,12 +6,24 @@
 #include <stdio.h>
 
 extern uint64_t *g_vr4300_profile_samples;
+#include "rsp/cpu.h"
 
 /* CEN64_PROFILE_DIR: per-benchmark-scenario CPU profiles (see vr4300/cpu.c). */
 static void profile_window(const char *line) {
   static int inited = 0; static const char *dir = NULL;
   const size_t n = 8 * 1024 * 1024;
   if (!inited) { inited = 1; dir = getenv("CEN64_PROFILE_DIR"); }
+  /* -rsphw: per-scenario issue statistics on stdout, next to the ROM's own lines. */
+  if (g_rsp_hw_stats != NULL && g_rsp_hw_stats->enabled) {
+    struct rsp_hwtiming *hw = g_rsp_hw_stats;
+    if (!strncmp(line, "BENCH_START,", 12)) {
+      hw->n_insn = hw->n_pair = hw->n_stall = hw->n_branch = 0;
+    } else if (!strncmp(line, "BENCH_END,", 10)) {
+      printf("RSPHW,%llu,%llu,%llu,%llu\n", (unsigned long long) hw->n_insn,
+             (unsigned long long) hw->n_pair, (unsigned long long) hw->n_stall,
+             (unsigned long long) hw->n_branch);
+    }
+  }
   if (dir == NULL || g_vr4300_profile_samples == NULL) return;
   if (!strncmp(line, "BENCH_START,", 12)) {
     memset(g_vr4300_profile_samples, 0, 4 * n * sizeof(uint64_t));

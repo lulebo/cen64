@@ -10,6 +10,10 @@
 
 #include "common.h"
 #include "rsp/cpu.h"
+#include <string.h>
+
+bool g_rsp_hw_timing = false;
+struct rsp_hwtiming *g_rsp_hw_stats = NULL; // for the IS-Viewer profile windows
 #include "rsp/cp0.h"
 
 #ifdef DEBUG_MMIO_REGISTER_ACCESS
@@ -27,6 +31,9 @@ static void rsp_connect_bus(struct rsp *rsp, struct bus_controller *bus) {
 
 // Releases memory acquired for the RSP component.
 void rsp_destroy(struct rsp *rsp) {
+  if (rsp->hw.enabled)
+    rsp_hw_print_stats(rsp);
+
   arch_rsp_destroy(rsp);
 }
 
@@ -36,6 +43,9 @@ int rsp_init(struct rsp *rsp, struct bus_controller *bus) {
 
   rsp_cp0_init(rsp);
   rsp_pipeline_init(&rsp->pipeline);
+  memset(&rsp->hw, 0, sizeof(rsp->hw));
+  rsp->hw.enabled = g_rsp_hw_timing;
+  g_rsp_hw_stats = &rsp->hw;
 
   return arch_rsp_init(rsp);
 }

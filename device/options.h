@@ -30,6 +30,7 @@ struct cen64_options {
 
   bool enable_debugger;
   bool enable_profiling;
+  bool rsp_hw_timing;
   bool multithread;
   bool no_audio;
   bool no_video;
