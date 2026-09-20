@@ -542,6 +542,7 @@ static void fetch_qword_copy(uint32_t* hidword, uint32_t* lowdword, int32_t ssss
 struct rdpstat_t {
     unsigned frame, tris, tris_cycle[4], rects, fillrects, tmem_loads;
     unsigned fbwrite, fbfill, fbread, zread, zwrite;
+    unsigned spans;
 };
 static struct rdpstat_t rdpstat;
 unsigned rspstat_imem_dma = 0;
@@ -4209,6 +4210,7 @@ void render_spans_1cycle_complete(int start, int end, int tilenum, int flip)
 	{
 		if (span[i].validline)
 		{
+		rdpstat.spans++;
 
 		xstart = span[i].lx;
 		xend = span[i].unscrx;
@@ -4418,6 +4420,7 @@ void render_spans_1cycle_notexel1(int start, int end, int tilenum, int flip)
 	{
 		if (span[i].validline)
 		{
+		rdpstat.spans++;
 
 		xstart = span[i].lx;
 		xend = span[i].unscrx;
@@ -4579,6 +4582,7 @@ void render_spans_1cycle_notex(int start, int end, int tilenum, int flip)
 	{
 		if (span[i].validline)
 		{
+		rdpstat.spans++;
 
 		xstart = span[i].lx;
 		xend = span[i].unscrx;
@@ -4731,6 +4735,7 @@ void render_spans_2cycle_complete(int start, int end, int tilenum, int flip)
 	{
 		if (span[i].validline)
 		{
+		rdpstat.spans++;
 
 		xstart = span[i].lx;
 		xend = span[i].unscrx;
@@ -4940,6 +4945,7 @@ void render_spans_2cycle_notexelnext(int start, int end, int tilenum, int flip)
 	{
 		if (span[i].validline)
 		{
+		rdpstat.spans++;
 
 		xstart = span[i].lx;
 		xend = span[i].unscrx;
@@ -5108,6 +5114,7 @@ void render_spans_2cycle_notexel1(int start, int end, int tilenum, int flip)
 	{
 		if (span[i].validline)
 		{
+		rdpstat.spans++;
 
 		xstart = span[i].lx;
 		xend = span[i].unscrx;
@@ -5264,6 +5271,7 @@ void render_spans_2cycle_notex(int start, int end, int tilenum, int flip)
 	{
 		if (span[i].validline)
 		{
+		rdpstat.spans++;
 
 		xstart = span[i].lx;
 		xend = span[i].unscrx;
@@ -5378,6 +5386,7 @@ void render_spans_fill(int start, int end, int flip)
 
 		if (span[i].validline)
 		{
+		rdpstat.spans++;
 			if (unlikely(fastkillbits && length >= 0))
 			{
 				if (!onetimewarnings.fillmbitcrashes)
@@ -5465,6 +5474,7 @@ void render_spans_copy(int start, int end, int tilenum, int flip)
 	{
 		if (span[i].validline)
 		{
+		rdpstat.spans++;
 
 		s = span[i].s;
 		t = span[i].t;
@@ -7148,10 +7158,12 @@ static void rdpstat_report(void)
 	       rdpstat.zread, rdpstat.zwrite, rdpstat_fbhash(), rspstat_imem_dma);
 	if (cen64->rdp.timing.on) {
 		struct rdp_timing *t = &cen64->rdp.timing;
-		printf("RDPT,%u,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu\n", rdpstat.frame, (unsigned long long) t->stat_busy_frame,
+		printf("RDPT,%u,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu\n", rdpstat.frame, (unsigned long long) t->stat_busy_frame,
 		       (unsigned long long) t->fpx1, (unsigned long long) t->fpx2, (unsigned long long) t->fpxfill, (unsigned long long) t->fpxcopy,
-		       (unsigned long long) t->fpxz, (unsigned long long) t->ftri, (unsigned long long) t->fcmd, (unsigned long long) t->ftmem);
+		       (unsigned long long) t->fpxz, (unsigned long long) t->ftri, (unsigned long long) t->fcmd, (unsigned long long) t->ftmem,
+		       (unsigned long long) t->fspans, (unsigned long long) t->fspansfb, (unsigned long long) t->fspansz);
 		t->stat_busy_frame = t->fpx1 = t->fpx2 = t->fpxfill = t->fpxcopy = t->fpxz = t->ftri = t->fcmd = t->ftmem = 0;
+		t->fspans = t->fspansfb = t->fspansz = 0;
 	}
 	rspstat_imem_dma = 0;
 	fflush(stdout);
@@ -7688,11 +7700,22 @@ static void rdp_timing_account(uint32_t cmd, uint32_t addr, uint32_t len, const 
 		default: cost += px * t->cfill; t->fpxfill += px; break;
 	}
 	cost += px_z * t->cz; t->fpxz += px_z;
+	{
+		unsigned sp = cmd == 0x29 ? 0 : rdpstat.spans - b->spans;
+		double per = t->cspan + (other_modes.image_read_en ? t->cspanfb : 0) + (other_modes.z_compare_en ? t->cspanz : 0);
+		cost += sp * per; t->fspans += sp;
+		if (other_modes.image_read_en) t->fspansfb += sp;
+		if (other_modes.z_compare_en) t->fspansz += sp;
+	}
 	// A full sync drains the pipe before it raises the interrupt, and a command
 	// the RDP fetches after having been idle pays the RDRAM latency first: the
 	// DP interrupt must never precede the RSP's own completion (hardware order).
-	if (cmd == 0x29) cost += 200;
-	if (t->busy_until <= t->now) cost += 64;
+	if (cmd == 0x29) cost += t->csync;
+	{
+		static int idle_fetch = -1;
+		if (idle_fetch < 0) { const char *e = getenv("CEN64_RDP_IDLEFETCH"); idle_fetch = e ? atoi(e) : 64; }
+		if (t->busy_until <= t->now) cost += idle_fetch;
+	}
 	if (cost < 1) cost = 1;
 	start = t->busy_until > t->now ? t->busy_until : t->now;
 	t->busy_until = start + (uint64_t) cost;

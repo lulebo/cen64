@@ -48,13 +48,14 @@ void rdp_timing_advance(struct rdp *rdp) {
 
 static void rdp_timing_init(struct rdp *rdp) {
   struct rdp_timing *t = &rdp->timing;
-  double *p[9] = { &t->c1, &t->c2, &t->cfill, &t->ccopy, &t->cz, &t->ctri, &t->crect, &t->ccmd, &t->ctmem };
-  double def[9] = { 1.0, 2.0, 0.25, 0.25, 0.5, 64, 32, 8, 256 };
+  double *p[13] = { &t->c1, &t->c2, &t->cfill, &t->ccopy, &t->cz, &t->ctri, &t->crect, &t->ccmd, &t->ctmem, &t->csync,
+                    &t->cspan, &t->cspanfb, &t->cspanz };
+  double def[13] = { 1.0, 2.0, 0.25, 0.25, 0.5, 64, 32, 8, 256, 200, 0, 0, 0 };
   const char *m = g_rdp_model ? g_rdp_model : getenv("CEN64_RDP_MODEL");
   int i;
-  for (i = 0; i < 9; i++) *p[i] = def[i];
+  for (i = 0; i < 13; i++) *p[i] = def[i];
   if (m) {
-    for (i = 0; i < 9 && m && *m; i++) {
+    for (i = 0; i < 13 && m && *m; i++) {
       *p[i] = atof(m);
       m = strchr(m, ',');
       if (m) m++;
@@ -62,8 +63,8 @@ static void rdp_timing_init(struct rdp *rdp) {
   }
   t->on = g_rdp_timing != 0;
   if (t->on)
-    fprintf(stderr, "RDP timing model: px1 %g px2 %g fill %g copy %g z %g tri %g rect %g cmd %g tmem %g\n",
-            t->c1, t->c2, t->cfill, t->ccopy, t->cz, t->ctri, t->crect, t->ccmd, t->ctmem);
+    fprintf(stderr, "RDP timing model: px1 %g px2 %g fill %g copy %g z %g tri %g rect %g cmd %g tmem %g sync %g span %g spanfb %g spanz %g\n",
+            t->c1, t->c2, t->cfill, t->ccopy, t->cz, t->ctri, t->crect, t->ccmd, t->ctmem, t->csync, t->cspan, t->cspanfb, t->cspanz);
 }
 
 int rdp_init(struct rdp *rdp, struct bus_controller *bus) {

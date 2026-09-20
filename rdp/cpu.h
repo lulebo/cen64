@@ -41,9 +41,11 @@ struct rdp_timing {
   unsigned start_valid;      // queued transfers (END written behind a running one): END_VALID
   unsigned start_pending;    // DPC_START latched, not yet taken by a DPC_END write: START_VALID
   unsigned on;
-  double c1, c2, cfill, ccopy, cz, ctri, crect, ccmd, ctmem; // cycles: per pixel by mode, per z pixel, per command kind
+  double c1, c2, cfill, ccopy, cz, ctri, crect, ccmd, ctmem, csync; // cycles: per pixel by mode, per z pixel, per command kind, full sync
+  double cspan, cspanfb, cspanz; // cycles per span: base, extra with image read, extra with z compare
   uint64_t stat_busy, stat_busy_frame;
   uint64_t fpx1, fpx2, fpxfill, fpxcopy, fpxz, ftri, fcmd, ftmem; // per-frame work behind the cost
+  uint64_t fspans, fspansfb, fspansz;
 };
 extern int g_rdp_timing;
 extern const char *g_rdp_model;

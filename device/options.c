@@ -73,7 +73,7 @@ int parse_options(struct cen64_options *options, int argc, const char *argv[]) {
 
     else if (!strcmp(argv[i], "-rdpmodel")) {
       if ((i + 1) >= argc) {
-        printf("-rdpmodel requires px1,px2,fill,copy,z,tri,rect,cmd,tmem cycles.\n\n");
+        printf("-rdpmodel requires px1,px2,fill,copy,z,tri,rect,cmd,tmem[,sync,span,spanfb,spanz] cycles.\n\n");
         return 1;
       }
       options->rdp_timing = true;
