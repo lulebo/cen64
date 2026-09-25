@@ -646,6 +646,18 @@ static void ov_begin_prim(uint32_t kind)
 #define OV_P (ov_prim[ov_cur])
 #define OV_ACTIVE (ov_on && ov_cur != 0xffffffffu)
 
+/* CEN64_NOISE_POS=1: position-seeded RDP noise (see the pixel gates in PROFILING.md) */
+static inline void ov_noise_seed(int x, int y)
+{
+	static int mode = -1;
+	if (mode < 0) { const char *e = getenv("CEN64_NOISE_POS"); mode = e && *e == '1'; }
+	if (mode) {
+		uint32_t h = (uint32_t)x * 0x9E3779B1u ^ (uint32_t)y * 0x85EBCA77u ^ rdpstat.frame * 0xC2B2AE3Du;
+		h ^= h >> 15; h *= 0x2C1B3C6Du; h ^= h >> 12;
+		iseed = (int32_t)h;
+	}
+}
+
 static inline void ov_span(void) { if (OV_ACTIVE) OV_P.spans++; }
 
 /* the colour image being traced: set on every SetColorImage; the owners of a previous
@@ -4574,7 +4586,7 @@ void render_spans_1cycle_complete(int start, int end, int tilenum, int flip)
 
 			rgbaz_correct_clip(offx, offy, sr, sg, sb, sa, &sz, curpixel_cvg);
 
-			get_dither_noise_ptr(x, i, &cdith, &adith);
+			ov_noise_seed(x, i); get_dither_noise_ptr(x, i, &cdith, &adith);
 			combiner_1cycle(adith, &curpixel_cvg);
 				
 			fbread1_ptr(curpixel, &curpixel_memcvg);
@@ -4746,7 +4758,7 @@ void render_spans_1cycle_notexel1(int start, int end, int tilenum, int flip)
 
 			rgbaz_correct_clip(offx, offy, sr, sg, sb, sa, &sz, curpixel_cvg);
 
-			get_dither_noise_ptr(x, i, &cdith, &adith);
+			ov_noise_seed(x, i); get_dither_noise_ptr(x, i, &cdith, &adith);
 			combiner_1cycle(adith, &curpixel_cvg);
 				
 			fbread1_ptr(curpixel, &curpixel_memcvg);
@@ -4884,7 +4896,7 @@ void render_spans_1cycle_notex(int start, int end, int tilenum, int flip)
 
 			rgbaz_correct_clip(offx, offy, sr, sg, sb, sa, &sz, curpixel_cvg);
 
-			get_dither_noise_ptr(x, i, &cdith, &adith);
+			ov_noise_seed(x, i); get_dither_noise_ptr(x, i, &cdith, &adith);
 			combiner_1cycle(adith, &curpixel_cvg);
 				
 			fbread1_ptr(curpixel, &curpixel_memcvg);
@@ -5087,7 +5099,7 @@ void render_spans_2cycle_complete(int start, int end, int tilenum, int flip)
 
 			rgbaz_correct_clip(offx, offy, sr, sg, sb, sa, &sz, curpixel_cvg);
 					
-			get_dither_noise_ptr(x, i, &cdith, &adith);
+			ov_noise_seed(x, i); get_dither_noise_ptr(x, i, &cdith, &adith);
 			combiner_2cycle(adith, &curpixel_cvg, &acalpha);
 
 			fbread2_ptr(curpixel, &curpixel_memcvg);
@@ -5263,7 +5275,7 @@ void render_spans_2cycle_notexelnext(int start, int end, int tilenum, int flip)
 
 			rgbaz_correct_clip(offx, offy, sr, sg, sb, sa, &sz, curpixel_cvg);
 
-			get_dither_noise_ptr(x, i, &cdith, &adith);
+			ov_noise_seed(x, i); get_dither_noise_ptr(x, i, &cdith, &adith);
 			combiner_2cycle(adith, &curpixel_cvg, &acalpha);
 
 			fbread2_ptr(curpixel, &curpixel_memcvg);
@@ -5432,7 +5444,7 @@ void render_spans_2cycle_notexel1(int start, int end, int tilenum, int flip)
 
 			rgbaz_correct_clip(offx, offy, sr, sg, sb, sa, &sz, curpixel_cvg);
 
-			get_dither_noise_ptr(x, i, &cdith, &adith);
+			ov_noise_seed(x, i); get_dither_noise_ptr(x, i, &cdith, &adith);
 			combiner_2cycle(adith, &curpixel_cvg, &acalpha);
 
 			fbread2_ptr(curpixel, &curpixel_memcvg);
@@ -5573,7 +5585,7 @@ void render_spans_2cycle_notex(int start, int end, int tilenum, int flip)
 
 			rgbaz_correct_clip(offx, offy, sr, sg, sb, sa, &sz, curpixel_cvg);
 
-			get_dither_noise_ptr(x, i, &cdith, &adith);
+			ov_noise_seed(x, i); get_dither_noise_ptr(x, i, &cdith, &adith);
 			combiner_2cycle(adith, &curpixel_cvg, &acalpha);
 
 			fbread2_ptr(curpixel, &curpixel_memcvg);
