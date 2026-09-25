@@ -660,6 +660,21 @@ static inline void ov_noise_seed(int x, int y)
 
 static inline void ov_span(void) { if (OV_ACTIVE) OV_P.spans++; }
 
+/* CEN64_PIXTRACE="x,y,from,to": one pixel's history */
+static int ov_px_x = -1, ov_px_y = -1, ov_px_inited;
+static unsigned ov_px_from, ov_px_to;
+static int ov_px_hit;
+static inline int ov_px_match(uint32_t curpixel)
+{
+	if (!ov_px_inited) {
+		const char *e = getenv("CEN64_PIXTRACE");
+		ov_px_inited = 1;
+		if (e) sscanf(e, "%d,%d,%u,%u", &ov_px_x, &ov_px_y, &ov_px_from, &ov_px_to);
+	}
+	if (ov_px_x < 0 || !OV_ACTIVE || rdpstat.frame < ov_px_from || rdpstat.frame > ov_px_to) return 0;
+	return fb_address == ov_fb && curpixel == (uint32_t)(ov_px_y * (int)ov_fbw + ov_px_x);
+}
+
 /* the colour image being traced: set on every SetColorImage; the owners of a previous
    image are dropped (the z clear targets the z buffer first) */
 static void ov_color_image(uint32_t addr, uint32_t width)
@@ -673,15 +688,30 @@ static void ov_color_image(uint32_t addr, uint32_t width)
 	}
 }
 
+static uint32_t ov_xmat[40][40];
+static inline int ov_cat(uint32_t grp)
+{
+	uint32_t hi = ov_grp[grp].hi;
+	uint32_t kind = (hi >> 15) & 7, zb = (hi >> 11) & 1, layer = (hi >> 12) & 7, slot = (hi >> 3) & 0xff;
+	if (grp == 0) return 39;
+	if (kind == 2) {
+		if (!zb) return 0;
+		return (slot == 0xff ? 10 : 20) + (int)layer;
+	}
+	return 30 + (int)kind;
+}
 static inline void ov_pixel_write(uint32_t curpixel, int dep)
 {
 	uint32_t prev;
 	if (!OV_ACTIVE) return;
+	if (ov_px_match(curpixel))
+		printf("PIX,%u,prim %u,WRITE dep %d\n", rdpstat.frame, ov_cur, dep);
 	if (dep) OV_P.wdep++; else OV_P.wdir++;
 	if (fb_address != ov_fb || curpixel >= OV_MAXPIX) return;
 	prev = ov_owner[curpixel];
 	if (prev) {
 		if (dep) ov_prim[prev - 1].odep++; else ov_prim[prev - 1].odir++;
+		if (!dep) ov_xmat[ov_cat(ov_prim[prev - 1].grp)][ov_cat(ov_prim[ov_cur].grp)]++;
 	}
 	ov_owner[curpixel] = ov_cur + 1;
 	if (!dep) ov_base[curpixel] = ov_cur + 1;
@@ -727,6 +757,13 @@ static void ov_frame_end(unsigned frame)
 			       frame, i, p->grp, p->kind, p->cyc, p->omhi, p->omlo, p->cchi, p->cclo,
 			       p->px, p->zfail, p->afail, p->wdir, p->wdep, p->odir, p->odep, p->fin,
 			       p->spans, p->rows, p->above, p->amax, p->yh, p->yl, p->base);
+	}
+	{
+		int a, b;
+		for (a = 0; a < 40; a++) for (b = 0; b < 40; b++) {
+			if (ov_xmat[a][b]) printf("OVX,%u,%d,%d,%u\n", frame, a, b, ov_xmat[a][b]);
+			ov_xmat[a][b] = 0;
+		}
 	}
 	printf("OVF,%u,%u,%u,%llu,%llu,%llu,%llu,%u\n", frame, ov_nprim, ov_ngrp,
 	       (unsigned long long) tot_px1, (unsigned long long) tot_px2, (unsigned long long) tot_pxf,
@@ -9095,9 +9132,15 @@ static inline uint32_t z_compare_impl(uint32_t zcurpixel, uint32_t sz, uint16_t 
 
 static inline uint32_t z_compare(uint32_t zcurpixel, uint32_t sz, uint16_t dzpix, int dzpixenc, uint32_t* blend_en, uint32_t* prewrap, uint32_t* curpixel_cvg, uint32_t curpixel_memcvg)
 {
+	uint32_t cvg_in = *curpixel_cvg;
 	uint32_t r = z_compare_impl(zcurpixel, sz, dzpix, dzpixenc, blend_en, prewrap, curpixel_cvg, curpixel_memcvg);
 	if (OV_ACTIVE) {
 		uint32_t cp = zcurpixel - (zb_address >> 1);
+		ov_px_hit = ov_px_match(cp);
+		if (ov_px_hit)
+			printf("PIX,%u,prim %u,grp %05x/%08x,cyc %d,L %08x,sz %05x,zpass %u,cvg %u->%u,memcvg %u,blend_en %u,prewrap %u\n",
+			       rdpstat.frame, ov_cur, ov_grp[ov_prim[ov_cur].grp].hi, ov_grp[ov_prim[ov_cur].grp].lo,
+			       other_modes.cycle_type, ov_omlo, sz & 0x3ffff, r, cvg_in, *curpixel_cvg, curpixel_memcvg, *blend_en, *prewrap);
 		OV_P.px++;
 		if (!r) OV_P.zfail++;
 		if ((uint32_t)shade_color.a > OV_P.amax) OV_P.amax = (uint32_t)shade_color.a;
