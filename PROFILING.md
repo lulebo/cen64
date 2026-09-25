@@ -110,3 +110,29 @@ core without editing the microcode.
 
 Ring size: 65536 commands in flight (about ten frames); the model forces the oldest to
 finish if it ever fills.
+
+## Overdraw tracer (`CEN64_OVERDRAW`)
+
+`CEN64_OVERDRAW="<from>:<to>[:<dir>[:p]]"` traces RDP frames `from..to` (frames are counted at
+full syncs, like the `RDP,` lines); `CEN64_OVERDRAW_EVERY=N` limits the per-primitive lines and the
+pixel dumps to frames divisible by N. Pixels are unchanged; the tracer only counts.
+
+- Every primitive (triangle, texture rectangle, fill rectangle) records the pixels it
+  rasterized, how many failed the z test or the alpha/coverage test, how many it wrote
+  *directly* (the result does not depend on the framebuffer: no blender input and no stored
+  coverage uses the memory value) or *dependently*, how many of its written pixels a later
+  primitive overwrote directly or dependently, how many it still owns when the frame ends, and
+  how many final pixels are built on its direct write (`base`). Its spans and walked lines
+  (including lines above the scissor) are counted too.
+- Groups come from marker commands: a SetConvert (0xEC) whose first word has 0xA in bits 21..18
+  starts a group; bits 17..0 and the second word are the group's tag (the ROM decides what they
+  mean). Kind 5 (bits 17..15) is printed once per frame as `OVB,<frame>,<slot>,<addr>` instead.
+- Output per traced frame: `OVF,<frame>,<prims>,<groups>,<px 1-cycle>,<px 2-cycle>,<px fill>,
+  <final pixels>,<traced pixels>`; per group `OVG,<frame>,<tag hi>,<tag lo>,<prims>,<px1>,<px2>,
+  <pxfill>,<zfail>,<afail>,<wdir>,<wdep>,<odir>,<odep>,<final>,<spans>,<spans z>,<spans fb>,<rows>,
+  <rows above>,<hidden prims>,<hidden px1>,<hidden px2>,<hidden pxfill>,<hidden spans>,
+  <hidden spans z>,<hidden spans fb>,<2-cycle px of prims with shade alpha 0>` where *hidden*
+  primitives own no final pixel and were never blended into one (dropping them leaves the frame
+  identical); with `p`, `OVP` per primitive; with a directory, `ovpix_<frame>.bin` = u32 width,
+  u32 height, then per pixel u32 final owner (primitive index + 1), u16 rasterization count and
+  u32 base primitive.

@@ -545,6 +545,208 @@ struct rdpstat_t {
     unsigned spans;
 };
 static struct rdpstat_t rdpstat;
+#include <stdlib.h>
+
+/* --- Overdraw tracer: CEN64_OVERDRAW="<from>:<to>[:<dir>[:p]]" (see PROFILING.md) --- */
+#define OV_MAXPRIM 65536
+#define OV_MAXGRP 8192
+#define OV_MAXPIX (640 * 480)
+struct ovprim {
+	uint32_t grp, kind, cyc, omhi, omlo, cchi, cclo;
+	uint32_t px, zfail, afail, wdir, wdep, odir, odep, fin, spans, rows, above, amax, base;
+	int32_t yh, yl;
+};
+struct ovgrp { uint32_t hi, lo; };
+static struct ovprim *ov_prim;
+static struct ovgrp *ov_grp;
+static uint32_t ov_nprim, ov_ngrp, ov_curgrp, ov_cur;
+static int ov_on, ov_inited, ov_perprim, ov_last_dep;
+static unsigned ov_every = 1;
+static unsigned ov_from = 1, ov_to = 0;
+static char ov_dir[256];
+static uint32_t *ov_owner;
+static uint32_t *ov_base;
+static uint16_t *ov_nproc;
+static uint32_t ov_fb = 0xffffffffu, ov_fbw = 0, ov_fblines = 0;
+static uint32_t ov_omhi, ov_omlo, ov_cchi, ov_cclo;
+
+static void ov_frame_begin(unsigned frame)
+{
+	if (!ov_inited) {
+		const char *e = getenv("CEN64_OVERDRAW");
+		ov_inited = 1;
+		if (e) {
+			const char *c;
+			ov_from = (unsigned)atoi(e);
+			c = strchr(e, ':');
+			if (c) {
+				ov_to = (unsigned)atoi(c + 1);
+				c = strchr(c + 1, ':');
+				if (c) {
+					const char *d = strchr(c + 1, ':');
+					size_t n = d ? (size_t)(d - c - 1) : strlen(c + 1);
+					if (n > 255) n = 255;
+					memcpy(ov_dir, c + 1, n); ov_dir[n] = 0;
+					if (d && d[1] == 'p') ov_perprim = 1;
+				}
+			}
+			if (getenv("CEN64_OVERDRAW_EVERY")) ov_every = (unsigned)atoi(getenv("CEN64_OVERDRAW_EVERY"));
+			if (!ov_every) ov_every = 1;
+			ov_prim = calloc(OV_MAXPRIM, sizeof *ov_prim);
+			ov_grp = calloc(OV_MAXGRP, sizeof *ov_grp);
+			ov_owner = calloc(OV_MAXPIX, sizeof *ov_owner);
+			ov_base = calloc(OV_MAXPIX, sizeof *ov_base);
+			ov_nproc = calloc(OV_MAXPIX, sizeof *ov_nproc);
+		}
+	}
+	ov_on = ov_prim && frame >= ov_from && frame <= ov_to;
+	ov_nprim = 0; ov_ngrp = 1; ov_curgrp = 0; ov_cur = 0xffffffffu;
+	if (ov_grp) ov_grp[0].hi = ov_grp[0].lo = 0;
+	ov_fb = 0xffffffffu;
+	if (ov_on) {
+		memset(ov_owner, 0, OV_MAXPIX * sizeof *ov_owner);
+		memset(ov_base, 0, OV_MAXPIX * sizeof *ov_base);
+		memset(ov_nproc, 0, OV_MAXPIX * sizeof *ov_nproc);
+	}
+}
+
+static void ov_marker(uint32_t hi, uint32_t lo)
+{
+	uint32_t i;
+	if (!ov_on) return;
+	if (((hi >> 15) & 7) == 5) {
+		static unsigned seen[256];
+		unsigned slot = (hi >> 3) & 0xff;
+		if (seen[slot] != rdpstat.frame + 1) {
+			seen[slot] = rdpstat.frame + 1;
+			printf("OVB,%u,%u,%08x\n", rdpstat.frame, slot, lo);
+		}
+		return;
+	}
+	for (i = ov_ngrp; i-- > 1; )
+		if (ov_grp[i].hi == hi && ov_grp[i].lo == lo) { ov_curgrp = i; return; }
+	if (ov_ngrp < OV_MAXGRP) {
+		ov_grp[ov_ngrp].hi = hi; ov_grp[ov_ngrp].lo = lo;
+		ov_curgrp = ov_ngrp++;
+	}
+}
+
+static void ov_begin_prim(uint32_t kind)
+{
+	struct ovprim *p;
+	if (!ov_on) return;
+	if (ov_nprim >= OV_MAXPRIM) { ov_cur = 0xffffffffu; return; }
+	ov_cur = ov_nprim++;
+	p = &ov_prim[ov_cur];
+	memset(p, 0, sizeof *p);
+	p->grp = ov_curgrp; p->kind = kind; p->cyc = other_modes.cycle_type;
+	p->omhi = ov_omhi; p->omlo = ov_omlo; p->cchi = ov_cchi; p->cclo = ov_cclo;
+}
+
+#define OV_P (ov_prim[ov_cur])
+#define OV_ACTIVE (ov_on && ov_cur != 0xffffffffu)
+
+static inline void ov_span(void) { if (OV_ACTIVE) OV_P.spans++; }
+
+/* the colour image being traced: set on every SetColorImage; the owners of a previous
+   image are dropped (the z clear targets the z buffer first) */
+static void ov_color_image(uint32_t addr, uint32_t width)
+{
+	if (!ov_on) return;
+	if (addr != ov_fb || width != ov_fbw) {
+		memset(ov_owner, 0, OV_MAXPIX * sizeof *ov_owner);
+		memset(ov_base, 0, OV_MAXPIX * sizeof *ov_base);
+		memset(ov_nproc, 0, OV_MAXPIX * sizeof *ov_nproc);
+		ov_fb = addr; ov_fbw = width;
+	}
+}
+
+static inline void ov_pixel_write(uint32_t curpixel, int dep)
+{
+	uint32_t prev;
+	if (!OV_ACTIVE) return;
+	if (dep) OV_P.wdep++; else OV_P.wdir++;
+	if (fb_address != ov_fb || curpixel >= OV_MAXPIX) return;
+	prev = ov_owner[curpixel];
+	if (prev) {
+		if (dep) ov_prim[prev - 1].odep++; else ov_prim[prev - 1].odir++;
+	}
+	ov_owner[curpixel] = ov_cur + 1;
+	if (!dep) ov_base[curpixel] = ov_cur + 1;
+}
+
+static void ov_frame_end(unsigned frame)
+{
+	/* per group sums */
+	struct gs { uint64_t prims, px1, px2, pxf, pxc, zfail, afail, wdir, wdep, odir, odep, fin, spans, spz, spfb, rows, above,
+	            rprims, rpx1, rpx2, rpxf, rspans, rspz, rspfb, fogfree_px2; };
+	static struct gs g[OV_MAXGRP];
+	uint32_t i, n;
+	uint64_t tot_px1 = 0, tot_px2 = 0, tot_pxf = 0, tot_fin = 0;
+	if (!ov_on) return;
+	n = ov_fb != 0xffffffffu ? (ov_fbw * 240u) : 0;
+	if (n > OV_MAXPIX) n = OV_MAXPIX;
+	for (i = 0; i < n; i++) {
+		if (ov_owner[i]) ov_prim[ov_owner[i] - 1].fin++;
+		if (ov_base[i]) ov_prim[ov_base[i] - 1].base++;
+	}
+	memset(g, 0, sizeof(struct gs) * ov_ngrp);
+	for (i = 0; i < ov_nprim; i++) {
+		struct ovprim *p = &ov_prim[i];
+		struct gs *s = &g[p->grp];
+		int zc = (p->omlo >> 4) & 1, imrd = (p->omlo >> 6) & 1;
+		int removable = p->fin == 0 && p->odep == 0;
+		uint64_t px1 = p->cyc == 0 ? p->px : 0, px2 = p->cyc == 1 ? p->px : 0, pxf = p->cyc >= 2 ? p->px : 0;
+		s->prims++; s->px1 += px1; s->px2 += px2; s->pxf += pxf;
+		s->zfail += p->zfail; s->afail += p->afail; s->wdir += p->wdir; s->wdep += p->wdep;
+		s->odir += p->odir; s->odep += p->odep; s->fin += p->fin; s->spans += p->spans;
+		if (zc) s->spz += p->spans;
+		if (imrd) s->spfb += p->spans;
+		s->rows += p->rows; s->above += p->above;
+		if (removable) {
+			s->rprims++; s->rpx1 += px1; s->rpx2 += px2; s->rpxf += pxf; s->rspans += p->spans;
+			if (zc) s->rspz += p->spans;
+			if (imrd) s->rspfb += p->spans;
+		}
+		if (p->cyc == 1 && p->amax == 0) s->fogfree_px2 += p->px;
+		tot_px1 += px1; tot_px2 += px2; tot_pxf += pxf; tot_fin += p->fin;
+		if (ov_perprim && (frame % ov_every) == 0)
+			printf("OVP,%u,%u,%u,%u,%u,%08x,%08x,%08x,%08x,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%d,%d,%u\n",
+			       frame, i, p->grp, p->kind, p->cyc, p->omhi, p->omlo, p->cchi, p->cclo,
+			       p->px, p->zfail, p->afail, p->wdir, p->wdep, p->odir, p->odep, p->fin,
+			       p->spans, p->rows, p->above, p->amax, p->yh, p->yl, p->base);
+	}
+	printf("OVF,%u,%u,%u,%llu,%llu,%llu,%llu,%u\n", frame, ov_nprim, ov_ngrp,
+	       (unsigned long long) tot_px1, (unsigned long long) tot_px2, (unsigned long long) tot_pxf,
+	       (unsigned long long) tot_fin, n);
+	for (i = 0; i < ov_ngrp; i++) {
+		struct gs *s = &g[i];
+		if (!s->prims) continue;
+		printf("OVG,%u,%05x,%08x,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu\n",
+		       frame, ov_grp[i].hi, ov_grp[i].lo,
+		       (unsigned long long) s->prims, (unsigned long long) s->px1, (unsigned long long) s->px2, (unsigned long long) s->pxf,
+		       (unsigned long long) s->zfail, (unsigned long long) s->afail, (unsigned long long) s->wdir, (unsigned long long) s->wdep,
+		       (unsigned long long) s->odir, (unsigned long long) s->odep, (unsigned long long) s->fin,
+		       (unsigned long long) s->spans, (unsigned long long) s->spz, (unsigned long long) s->spfb,
+		       (unsigned long long) s->rows, (unsigned long long) s->above,
+		       (unsigned long long) s->rprims, (unsigned long long) s->rpx1, (unsigned long long) s->rpx2, (unsigned long long) s->rpxf,
+		       (unsigned long long) s->rspans, (unsigned long long) s->rspz, (unsigned long long) s->rspfb,
+		       (unsigned long long) s->fogfree_px2);
+	}
+	if (ov_dir[0] && n && (frame % ov_every) == 0) {
+		char path[300]; FILE *f;
+		snprintf(path, sizeof path, "%s/ovpix_%06u.bin", ov_dir, frame);
+		f = fopen(path, "wb");
+		if (f) {
+			uint32_t hdr[2] = { ov_fbw, n / (ov_fbw ? ov_fbw : 1) };
+			fwrite(hdr, sizeof hdr, 1, f);
+			fwrite(ov_owner, sizeof *ov_owner, n, f);
+			fwrite(ov_nproc, sizeof *ov_nproc, n, f);
+			fwrite(ov_base, sizeof *ov_base, n, f);
+			fclose(f);
+		}
+	}
+}
 unsigned rspstat_imem_dma = 0;
 static void rdpstat_report(void);
 static void render_spans_1cycle_complete(int start, int end, int tilenum, int flip);
@@ -1901,7 +2103,7 @@ static const uint8_t magic_matrix[16] =
 	 7,  1,  6, 0
 };
 
-static inline int blender_1cycle(uint32_t* fr, uint32_t* fg, uint32_t* fb, int dith, uint32_t blend_en, uint32_t prewrap, uint32_t curpixel_cvg, uint32_t curpixel_cvbit)
+static inline int blender_1cycle_impl(uint32_t* fr, uint32_t* fg, uint32_t* fb, int dith, uint32_t blend_en, uint32_t prewrap, uint32_t curpixel_cvg, uint32_t curpixel_cvbit)
 {
 	int r, g, b, dontblend;
 	
@@ -1957,7 +2159,7 @@ static inline int blender_1cycle(uint32_t* fr, uint32_t* fg, uint32_t* fb, int d
 		return 0;
 }
 
-static inline int blender_2cycle(uint32_t* fr, uint32_t* fg, uint32_t* fb, int dith, uint32_t blend_en, uint32_t prewrap, uint32_t curpixel_cvg, uint32_t curpixel_cvbit, int32_t acalpha)
+static inline int blender_2cycle_impl(uint32_t* fr, uint32_t* fg, uint32_t* fb, int dith, uint32_t blend_en, uint32_t prewrap, uint32_t curpixel_cvg, uint32_t curpixel_cvbit, int32_t acalpha)
 {
 	int r, g, b, dontblend;
 
@@ -2019,6 +2221,55 @@ static inline int blender_2cycle(uint32_t* fr, uint32_t* fg, uint32_t* fb, int d
 		memory_color = pre_memory_color;
 		return 0;
 	}
+}
+
+static inline int ov_is_mem(int32_t *p) { return p == &memory_color.r || p == &pre_memory_color.r; }
+static inline int ov_mem_a(int32_t *p) { return p == &memory_color.a || p == &pre_memory_color.a; }
+/* stored coverage: WRAP/SAVE always mix in the memory coverage; CLAMP only when blending a partial pixel */
+static inline int ov_cvg_dep(uint32_t blend_en, uint32_t cvg)
+{
+	return other_modes.cvg_dest == CVG_WRAP || other_modes.cvg_dest == CVG_SAVE ||
+	       (other_modes.cvg_dest == CVG_CLAMP && blend_en && cvg < 8);
+}
+/* colour of one blender cycle: applied = !color_on_cvg || prewrap, blend = blend_en && !dontblend;
+   pin/min = the P/M inputs count as memory-dependent */
+static inline int ov_cycle_dep(int applied, int blend, int pin, int min, int32_t *a, int32_t *b)
+{
+	if (!applied) return min;
+	if (!blend) return pin;
+	return pin || min || ov_mem_a(a) || ov_mem_a(b);
+}
+static inline int blender_1cycle(uint32_t* fr, uint32_t* fg, uint32_t* fb, int dith, uint32_t blend_en, uint32_t prewrap, uint32_t curpixel_cvg, uint32_t curpixel_cvbit)
+{
+	int r = blender_1cycle_impl(fr, fg, fb, dith, blend_en, prewrap, curpixel_cvg, curpixel_cvbit);
+	if (OV_ACTIVE) {
+		if (!r) OV_P.afail++;
+		else {
+			int dontblend = other_modes.f.partialreject_1cycle && pixel_color.a >= 0xff;
+			int dep = ov_cycle_dep(!other_modes.color_on_cvg || prewrap, blend_en && !dontblend,
+			                       ov_is_mem(blender1a_r[0]), ov_is_mem(blender2a_r[0]), blender1b_a[0], blender2b_a[0]);
+			ov_last_dep = dep || ov_cvg_dep(blend_en, curpixel_cvg);
+		}
+	}
+	return r;
+}
+static inline int blender_2cycle(uint32_t* fr, uint32_t* fg, uint32_t* fb, int dith, uint32_t blend_en, uint32_t prewrap, uint32_t curpixel_cvg, uint32_t curpixel_cvbit, int32_t acalpha)
+{
+	int r = blender_2cycle_impl(fr, fg, fb, dith, blend_en, prewrap, curpixel_cvg, curpixel_cvbit, acalpha);
+	if (OV_ACTIVE) {
+		if (!r) OV_P.afail++;
+		else {
+			int dontblend = other_modes.f.partialreject_2cycle && pixel_color.a >= 0xff;
+			/* cycle 0 is always evaluated; cycle 1 sees its result as CLR_IN (blended_pixel_color) */
+			int dep0 = ov_is_mem(blender1a_r[0]) || ov_is_mem(blender2a_r[0]) || ov_mem_a(blender1b_a[0]) || ov_mem_a(blender2b_a[0]);
+			int pin = ov_is_mem(blender1a_r[1]) || (blender1a_r[1] == &blended_pixel_color.r && dep0);
+			int min = ov_is_mem(blender2a_r[1]) || (blender2a_r[1] == &blended_pixel_color.r && dep0);
+			int dep = ov_cycle_dep(!other_modes.color_on_cvg || prewrap, blend_en && !dontblend,
+			                       pin, min, blender1b_a[1], blender2b_a[1]);
+			ov_last_dep = dep || ov_cvg_dep(blend_en, curpixel_cvg);
+		}
+	}
+	return r;
 }
 
 
@@ -4210,7 +4461,7 @@ void render_spans_1cycle_complete(int start, int end, int tilenum, int flip)
 	{
 		if (span[i].validline)
 		{
-		rdpstat.spans++;
+		rdpstat.spans++; ov_span();
 
 		xstart = span[i].lx;
 		xend = span[i].unscrx;
@@ -4420,7 +4671,7 @@ void render_spans_1cycle_notexel1(int start, int end, int tilenum, int flip)
 	{
 		if (span[i].validline)
 		{
-		rdpstat.spans++;
+		rdpstat.spans++; ov_span();
 
 		xstart = span[i].lx;
 		xend = span[i].unscrx;
@@ -4582,7 +4833,7 @@ void render_spans_1cycle_notex(int start, int end, int tilenum, int flip)
 	{
 		if (span[i].validline)
 		{
-		rdpstat.spans++;
+		rdpstat.spans++; ov_span();
 
 		xstart = span[i].lx;
 		xend = span[i].unscrx;
@@ -4735,7 +4986,7 @@ void render_spans_2cycle_complete(int start, int end, int tilenum, int flip)
 	{
 		if (span[i].validline)
 		{
-		rdpstat.spans++;
+		rdpstat.spans++; ov_span();
 
 		xstart = span[i].lx;
 		xend = span[i].unscrx;
@@ -4945,7 +5196,7 @@ void render_spans_2cycle_notexelnext(int start, int end, int tilenum, int flip)
 	{
 		if (span[i].validline)
 		{
-		rdpstat.spans++;
+		rdpstat.spans++; ov_span();
 
 		xstart = span[i].lx;
 		xend = span[i].unscrx;
@@ -5114,7 +5365,7 @@ void render_spans_2cycle_notexel1(int start, int end, int tilenum, int flip)
 	{
 		if (span[i].validline)
 		{
-		rdpstat.spans++;
+		rdpstat.spans++; ov_span();
 
 		xstart = span[i].lx;
 		xend = span[i].unscrx;
@@ -5271,7 +5522,7 @@ void render_spans_2cycle_notex(int start, int end, int tilenum, int flip)
 	{
 		if (span[i].validline)
 		{
-		rdpstat.spans++;
+		rdpstat.spans++; ov_span();
 
 		xstart = span[i].lx;
 		xend = span[i].unscrx;
@@ -5386,7 +5637,7 @@ void render_spans_fill(int start, int end, int flip)
 
 		if (span[i].validline)
 		{
-		rdpstat.spans++;
+		rdpstat.spans++; ov_span();
 			if (unlikely(fastkillbits && length >= 0))
 			{
 				if (!onetimewarnings.fillmbitcrashes)
@@ -5474,7 +5725,7 @@ void render_spans_copy(int start, int end, int tilenum, int flip)
 	{
 		if (span[i].validline)
 		{
-		rdpstat.spans++;
+		rdpstat.spans++; ov_span();
 
 		s = span[i].s;
 		t = span[i].t;
@@ -6086,6 +6337,11 @@ static void edgewalker_for_prims(int32_t* ewdata)
 	yhlimit = yhlimit ? yh : clip.yh;
 
 	int yhclose = yhlimit & ~3;
+	if (OV_ACTIVE) {
+		{ int _r = ((ylfar >> 2) - (ycur >> 2)) + 1; OV_P.rows = _r > 0 ? (uint32_t)_r : 0; }
+		OV_P.above = yh < (int32_t)clip.yh ? (uint32_t)((((int32_t)clip.yh & ~3) - (yh & ~3)) >> 2) : 0;
+		OV_P.yh = yh; OV_P.yl = yl;
+	}
 
 	int32_t clipxlshift = clip.xl << 1;
 	int32_t clipxhshift = clip.xh << 1;
@@ -6865,6 +7121,7 @@ static void rdp_noop(uint32_t w1, uint32_t w2)
 
 static void rdp_tri_noshade(uint32_t w1, uint32_t w2)
 {
+	ov_begin_prim(0);
 	rdpstat.tris++; rdpstat.tris_cycle[other_modes.cycle_type & 3]++;
 	int32_t ewdata[44];
 	memcpy(&ewdata[0], &rdp_cmd_data[rdp_cmd_cur], 8 * sizeof(int32_t));
@@ -6874,6 +7131,7 @@ static void rdp_tri_noshade(uint32_t w1, uint32_t w2)
 
 static void rdp_tri_noshade_z(uint32_t w1, uint32_t w2)
 {
+	ov_begin_prim(0);
 	rdpstat.tris++; rdpstat.tris_cycle[other_modes.cycle_type & 3]++;
 	int32_t ewdata[44];
 	memcpy(&ewdata[0], &rdp_cmd_data[rdp_cmd_cur], 8 * sizeof(int32_t));
@@ -6884,6 +7142,7 @@ static void rdp_tri_noshade_z(uint32_t w1, uint32_t w2)
 
 static void rdp_tri_tex(uint32_t w1, uint32_t w2)
 {
+	ov_begin_prim(0);
 	rdpstat.tris++; rdpstat.tris_cycle[other_modes.cycle_type & 3]++;
 	int32_t ewdata[44];
 	memcpy(&ewdata[0], &rdp_cmd_data[rdp_cmd_cur], 8 * sizeof(int32_t));
@@ -6895,6 +7154,7 @@ static void rdp_tri_tex(uint32_t w1, uint32_t w2)
 
 static void rdp_tri_tex_z(uint32_t w1, uint32_t w2)
 {
+	ov_begin_prim(0);
 	rdpstat.tris++; rdpstat.tris_cycle[other_modes.cycle_type & 3]++;
 	int32_t ewdata[44];
 	memcpy(&ewdata[0], &rdp_cmd_data[rdp_cmd_cur], 8 * sizeof(int32_t));
@@ -6906,6 +7166,7 @@ static void rdp_tri_tex_z(uint32_t w1, uint32_t w2)
 
 static void rdp_tri_shade(uint32_t w1, uint32_t w2)
 {
+	ov_begin_prim(0);
 	rdpstat.tris++; rdpstat.tris_cycle[other_modes.cycle_type & 3]++;
 	int32_t ewdata[44];
 	memcpy(&ewdata[0], &rdp_cmd_data[rdp_cmd_cur], 24 * sizeof(int32_t));
@@ -6915,6 +7176,7 @@ static void rdp_tri_shade(uint32_t w1, uint32_t w2)
 
 static void rdp_tri_shade_z(uint32_t w1, uint32_t w2)
 {
+	ov_begin_prim(0);
 	rdpstat.tris++; rdpstat.tris_cycle[other_modes.cycle_type & 3]++;
 	int32_t ewdata[44];
 	memcpy(&ewdata[0], &rdp_cmd_data[rdp_cmd_cur], 24 * sizeof(int32_t));
@@ -6925,6 +7187,7 @@ static void rdp_tri_shade_z(uint32_t w1, uint32_t w2)
 
 static void rdp_tri_texshade(uint32_t w1, uint32_t w2)
 {
+	ov_begin_prim(0);
 	rdpstat.tris++; rdpstat.tris_cycle[other_modes.cycle_type & 3]++;
 	int32_t ewdata[44];
 	memcpy(&ewdata[0], &rdp_cmd_data[rdp_cmd_cur], 40 * sizeof(int32_t));
@@ -6934,6 +7197,7 @@ static void rdp_tri_texshade(uint32_t w1, uint32_t w2)
 
 static void rdp_tri_texshade_z(uint32_t w1, uint32_t w2)
 {
+	ov_begin_prim(0);
 	rdpstat.tris++; rdpstat.tris_cycle[other_modes.cycle_type & 3]++;
 	int32_t ewdata[44];
 	memcpy(&ewdata[0], &rdp_cmd_data[rdp_cmd_cur], 44 * sizeof(int32_t));
@@ -6942,6 +7206,7 @@ static void rdp_tri_texshade_z(uint32_t w1, uint32_t w2)
 
 static void rdp_tex_rect(uint32_t w1, uint32_t w2)
 {
+	ov_begin_prim(1);
 	rdpstat.rects++;
 	uint32_t w3 = rdp_cmd_data[rdp_cmd_cur + 2];
 	uint32_t w4 = rdp_cmd_data[rdp_cmd_cur + 3];
@@ -7003,6 +7268,7 @@ static void rdp_tex_rect(uint32_t w1, uint32_t w2)
 
 static void rdp_tex_rect_flip(uint32_t w1, uint32_t w2)
 {
+	ov_begin_prim(1);
 	rdpstat.rects++;
 	uint32_t w3 = rdp_cmd_data[rdp_cmd_cur+2];
 	uint32_t w4 = rdp_cmd_data[rdp_cmd_cur+3];
@@ -7166,8 +7432,10 @@ static void rdpstat_report(void)
 		t->fspans = t->fspansfb = t->fspansz = 0;
 	}
 	rspstat_imem_dma = 0;
+	ov_frame_end(rdpstat.frame);
 	fflush(stdout);
 	rdpstat.frame++;
+	ov_frame_begin(rdpstat.frame);
 	rdpstat.tris = rdpstat.rects = rdpstat.fillrects = rdpstat.tmem_loads = 0;
 	rdpstat.tris_cycle[0] = rdpstat.tris_cycle[1] = rdpstat.tris_cycle[2] = rdpstat.tris_cycle[3] = 0;
 	rdpstat.fbwrite = rdpstat.fbfill = rdpstat.fbread = rdpstat.zread = rdpstat.zwrite = 0;
@@ -7235,6 +7503,8 @@ static void rdp_set_convert(uint32_t w1, uint32_t w2)
 	k3_tf = (SIGN(k3, 9) << 1) + 1;
 	k4 = (w2 >> 9) & 0x1ff;
 	k5 = w2 & 0x1ff;
+	if (((w1 >> 18) & 0xf) == 0xa)
+		ov_marker(w1 & 0x3ffff, w2);
 }
 
 static void rdp_set_scissor(uint32_t w1, uint32_t w2)
@@ -7258,6 +7528,7 @@ static void rdp_set_prim_depth(uint32_t w1, uint32_t w2)
 
 static void rdp_set_other_modes(uint32_t w1, uint32_t w2)
 {
+	ov_omhi = w1; ov_omlo = w2;
 	other_modes.cycle_type			= (w1 >> 20) & 0x3;
 	other_modes.persp_tex_en 		= (w1 & 0x80000) ? 1 : 0;
 	other_modes.detail_tex_en		= (w1 & 0x40000) ? 1 : 0;
@@ -7514,6 +7785,7 @@ static void rdp_set_tile(uint32_t w1, uint32_t w2)
 
 static void rdp_fill_rect(uint32_t w1, uint32_t w2)
 {
+	ov_begin_prim(2);
 	rdpstat.fillrects++;
 	uint32_t xl = (w1 >> 12) & 0xfff;
 	uint32_t yl = (w1 >>  0) & 0xfff;
@@ -7582,6 +7854,7 @@ static void rdp_set_env_color(uint32_t w1, uint32_t w2)
 
 static void rdp_set_combine(uint32_t w1, uint32_t w2)
 {
+	ov_cchi = w1; ov_cclo = w2;
 	combine.sub_a_rgb0	= (w1 >> 20) & 0xf;
 	combine.mul_rgb0	= (w1 >> 15) & 0x1f;
 	combine.sub_a_a0	= (w1 >> 12) & 0x7;
@@ -7644,6 +7917,7 @@ static void rdp_set_color_image(uint32_t w1, uint32_t w2)
 	fb_size		= (w1 >> 19) & 0x3;
 	fb_width	= (w1 & 0x3ff) + 1;
 	fb_address	= w2 & 0x0ffffff;
+	ov_color_image(fb_address, fb_width);
 
 	
 	fbread1_ptr = fbread_func[fb_size];
@@ -8159,6 +8433,7 @@ static void fbwrite_8(uint32_t curpixel, uint32_t r, uint32_t g, uint32_t b, uin
 static void fbwrite_16(uint32_t curpixel, uint32_t r, uint32_t g, uint32_t b, uint32_t blend_en, uint32_t curpixel_cvg, uint32_t curpixel_memcvg)
 {
 	rdpstat.fbwrite++;
+	ov_pixel_write(curpixel, ov_last_dep);
 #undef CVG_DRAW
 #ifdef CVG_DRAW
 	int covdraw = (curpixel_cvg - 1) << 5;
@@ -8218,6 +8493,8 @@ static void fbfill_8(uint32_t curpixel)
 static void fbfill_16(uint32_t curpixel)
 {
 	rdpstat.fbfill++;
+	if (OV_ACTIVE) { OV_P.px++; if (fb_address == ov_fb && curpixel < OV_MAXPIX && ov_nproc[curpixel] < 0xffff) ov_nproc[curpixel]++; }
+	ov_pixel_write(curpixel, 0);
 	uint16_t val;
 	uint8_t hval;
 	uint32_t fb = (fb_address >> 1) + curpixel;
@@ -8649,7 +8926,7 @@ static inline uint32_t dz_compress(uint32_t value)
 	return j;
 }
 
-static inline uint32_t z_compare(uint32_t zcurpixel, uint32_t sz, uint16_t dzpix, int dzpixenc, uint32_t* blend_en, uint32_t* prewrap, uint32_t* curpixel_cvg, uint32_t curpixel_memcvg)
+static inline uint32_t z_compare_impl(uint32_t zcurpixel, uint32_t sz, uint16_t dzpix, int dzpixenc, uint32_t* blend_en, uint32_t* prewrap, uint32_t* curpixel_cvg, uint32_t curpixel_memcvg)
 {
 	rdpstat.zread++;
 
@@ -8802,6 +9079,19 @@ static inline uint32_t z_compare(uint32_t zcurpixel, uint32_t sz, uint16_t dzpix
 
 		return 1;
 	}
+}
+
+static inline uint32_t z_compare(uint32_t zcurpixel, uint32_t sz, uint16_t dzpix, int dzpixenc, uint32_t* blend_en, uint32_t* prewrap, uint32_t* curpixel_cvg, uint32_t curpixel_memcvg)
+{
+	uint32_t r = z_compare_impl(zcurpixel, sz, dzpix, dzpixenc, blend_en, prewrap, curpixel_cvg, curpixel_memcvg);
+	if (OV_ACTIVE) {
+		uint32_t cp = zcurpixel - (zb_address >> 1);
+		OV_P.px++;
+		if (!r) OV_P.zfail++;
+		if ((uint32_t)shade_color.a > OV_P.amax) OV_P.amax = (uint32_t)shade_color.a;
+		if (fb_address == ov_fb && cp < OV_MAXPIX && ov_nproc[cp] < 0xffff) ov_nproc[cp]++;
+	}
+	return r;
 }
 
 static inline int finalize_spanalpha(uint32_t blend_en, uint32_t curpixel_cvg, uint32_t curpixel_memcvg)
