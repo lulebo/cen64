@@ -30,6 +30,12 @@ extern int g_rsp_task_is_audio;
 extern uint64_t *g_dline_prof;
 #define DLINE_FILL(pa) do { if (g_dline_prof) g_dline_prof[((pa) & 0x7FFFFF) >> 4]++; } while (0)
 #define DLINE_WB(pa) do { if (g_dline_prof) g_dline_prof[DLINES + (((pa) & 0x7FFFFF) >> 4)]++; } while (0)
+/* CEN64_DRANGE: D-cache fills inside physical ranges, per (range, PC) */
+void drange_fill(uint32_t paddr, uint32_t pc);
+void drange_reset(void);
+void drange_dump(const char *path);
+extern int g_drange_n;
+#define DRANGE_FILL(pa, pc) do { if (g_drange_n) drange_fill((pa), (pc)); } while (0)
 #define PROF_REGION (8 * 1024 * 1024)
 #define PROF_REGIONS 6 /* ins, l1d (misses + uncached), cycles, icache, dirty write-backs, uncached RDRAM */
 #endif

@@ -27,6 +27,44 @@ const char *mi_register_mnemonics[NUM_MI_REGISTERS] = {
 uint64_t *g_vr4300_profile_samples = NULL;
 #include "common/bus_traffic.h"
 struct bus_traffic g_bus;
+
+int g_drange_n = 0;
+static uint32_t drange_lo[8], drange_hi[8];
+#define DRANGE_HASH (1 << 16)
+static struct { uint32_t key_pc; uint8_t range; uint8_t used; uint64_t fills; } drange_tab[DRANGE_HASH];
+static void drange_init(void) {
+  const char *e = getenv("CEN64_DRANGE");
+  while (e && *e && g_drange_n < 8) {
+    char *end;
+    drange_lo[g_drange_n] = (uint32_t) strtoul(e, &end, 16);
+    if (*end != ':') break;
+    drange_hi[g_drange_n] = (uint32_t) strtoul(end + 1, &end, 16);
+    g_drange_n++;
+    e = *end == ',' ? end + 1 : end;
+  }
+}
+void drange_fill(uint32_t paddr, uint32_t pc) {
+  int r;
+  paddr &= 0x1FFFFFFF;
+  for (r = 0; r < g_drange_n; r++) {
+    if (paddr >= drange_lo[r] && paddr < drange_hi[r]) {
+      uint32_t h = ((pc >> 2) * 2654435761u + r) & (DRANGE_HASH - 1), n;
+      for (n = 0; n < DRANGE_HASH; n++, h = (h + 1) & (DRANGE_HASH - 1)) {
+        if (!drange_tab[h].used) { drange_tab[h].used = 1; drange_tab[h].key_pc = pc; drange_tab[h].range = (uint8_t) r; }
+        if (drange_tab[h].key_pc == pc && drange_tab[h].range == r) { drange_tab[h].fills++; break; }
+      }
+    }
+  }
+}
+void drange_reset(void) { memset(drange_tab, 0, sizeof(drange_tab)); }
+void drange_dump(const char *path) {
+  FILE *f; unsigned i;
+  if (!g_drange_n || !(f = fopen(path, "w"))) return;
+  for (i = 0; i < DRANGE_HASH; i++)
+    if (drange_tab[i].used)
+      fprintf(f, "%u %x %llu\n", drange_tab[i].range, drange_tab[i].key_pc, (unsigned long long) drange_tab[i].fills);
+  fclose(f);
+}
 uint64_t *g_dline_prof = NULL;
 
 void vr4300_cycle(struct vr4300 *vr4300) {
@@ -86,6 +124,7 @@ int vr4300_init(struct vr4300 *vr4300, struct bus_controller *bus, bool profilin
     vr4300->profile_samples = calloc(PROF_REGIONS * PROF_REGION, sizeof(uint64_t));
     g_vr4300_profile_samples = vr4300->profile_samples;
     g_dline_prof = calloc(2 * DLINES, sizeof(uint64_t));
+    drange_init();
   } else
     vr4300->profile_samples = NULL;
 

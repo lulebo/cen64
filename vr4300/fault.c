@@ -345,6 +345,7 @@ void VR4300_DCM(struct vr4300 *vr4300) {
   }
   g_bus.cpu_dfill++;
   DLINE_FILL(paddr);
+  DRANGE_FILL(paddr, (uint32_t) exdc_latch->common.pc);
 
   // Raise interlock condition, get virtual address.
   paddr &= ~0xF;

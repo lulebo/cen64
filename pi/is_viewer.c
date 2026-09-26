@@ -80,11 +80,14 @@ static void profile_window(const char *line) {
   if (!strncmp(line, "BENCH_START,", 12)) {
     memset(g_vr4300_profile_samples, 0, PROF_REGIONS * n * sizeof(uint64_t));
     if (g_dline_prof) memset(g_dline_prof, 0, 2 * DLINES * sizeof(uint64_t));
+    drange_reset();
   } else if (!strncmp(line, "BENCH_END,", 10)) {
     char name[64], path[512]; size_t i, k = 0; FILE *f;
     const char *p = line + 10;
     while (*p && *p != ',' && *p != '\n' && k < sizeof(name) - 1) name[k++] = *p++;
     name[k] = 0;
+    snprintf(path, sizeof(path), "%s/%s.drange", dir, name);
+    drange_dump(path);
     if (g_dline_prof) {
       snprintf(path, sizeof(path), "%s/%s.dprofile", dir, name);
       f = fopen(path, "w");

@@ -22,7 +22,7 @@ static const struct { const char *name; size_t off; } param_tab[] = {
   P(req), P(rdelay), P(wdelay), P(per_byte), P(row_miss), P(refresh), P(refresh_close),
   P(cpu_d), P(cpu_i), P(cpu_unc), P(cpu_wb), P(cpu_uncw), P(burst), P(px1), P(px2), P(fill),
   P(copy), P(tri), P(rect), P(cmd), P(tmem8), P(sync), P(span), P(overlap), P(bank_bits),
-  P(row_bits), P(pi_gap), P(cmd_fetch), P(idle)
+  P(row_bits), P(pi_gap), P(cmd_fetch), P(idle), P(cpu_bus), P(rsp_bus), P(cpu_rows), P(rsp_rows)
 };
 #undef P
 #define NPARAM (sizeof(param_tab) / sizeof(param_tab[0]))
@@ -50,6 +50,8 @@ uint64_t rdram_access(uint64_t t, uint32_t addr, uint32_t bytes, int write, int 
   struct rdram_stat *s = &m->st[agent];
   uint64_t start = t > m->bus_free ? t : m->bus_free;
   unsigned bank = (addr >> (unsigned) m->p.bank_bits) & 15;
+  if ((agent <= RA_CPU_UNC && m->p.cpu_rows > 0) || (agent == RA_RSP && m->p.rsp_rows > 0))
+    bank += 16;
   int32_t row = (int32_t) (addr >> (unsigned) m->p.row_bits);
   double cost = m->p.req + (write ? m->p.wdelay : m->p.rdelay) + bytes * m->p.per_byte;
   uint64_t c;
@@ -61,9 +63,13 @@ uint64_t rdram_access(uint64_t t, uint32_t addr, uint32_t bytes, int write, int 
     s->hits++;
   c = (uint64_t) (cost + 0.5);
   if (c < 1) c = 1;
-  m->bus_free = start + c;
-  s->n++; s->bytes += bytes; s->busy += c; s->wait += start - t;
-  return m->bus_free;
+  {
+    double share = agent <= RA_CPU_UNC ? m->p.cpu_bus : agent == RA_RSP ? m->p.rsp_bus : 1.0;
+    uint64_t cb = (uint64_t) (c * share + 0.5);
+    m->bus_free = start + cb;
+    s->n++; s->bytes += bytes; s->busy += cb; s->wait += start - t;
+  }
+  return start + c;
 }
 
 static void mark_done(unsigned idx, uint64_t clocks) {
@@ -275,7 +281,7 @@ void rdram_refresh(void) {
   s->n++; s->busy += c; s->wait += start - m->now;
   if (m->p.refresh_close > 0) {
     int i;
-    for (i = 0; i < 16; i++) m->open_row[i] = -1;
+    for (i = 0; i < 32; i++) m->open_row[i] = -1;
   }
 }
 
@@ -299,13 +305,15 @@ void rdram_model_init(void) {
     128,                                // burst
     1.08, 2.16, 0.25, 0.25,             // px1 px2 fill copy
     32, 16, 2, 1, 200, 8,               // tri rect cmd tmem8 sync span
-    0, 20, 11, 1591, 64, 64             // overlap bank_bits row_bits pi_gap cmd_fetch idle
+    0, 20, 11, 1591, 64, 64,            // overlap bank_bits row_bits pi_gap cmd_fetch idle
+    1, 1,                               // cpu_bus rsp_bus (experiments: share of the channel time they occupy)
+    0, 0                                // cpu_rows rsp_rows (experiments: separate open-row state)
   };
   const char *s = g_rdram_params ? g_rdram_params : getenv("CEN64_RDRAM_MODEL");
   int i;
   memset(&g_rdram, 0, sizeof(g_rdram));
   g_rdram.p = d;
-  for (i = 0; i < 16; i++) g_rdram.open_row[i] = -1;
+  for (i = 0; i < 32; i++) g_rdram.open_row[i] = -1;
   while (s && *s) {
     char key[32]; size_t k = 0; unsigned j;
     while (*s && *s != '=' && *s != ',' && k < sizeof(key) - 1) key[k++] = *s++;
