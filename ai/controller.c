@@ -9,6 +9,8 @@
 //
 
 #include "common.h"
+#include <stdlib.h>
+#include <stdio.h>
 #include "ai/context.h"
 #include "ai/controller.h"
 #include "bus/address.h"
@@ -64,6 +66,23 @@ void ai_dma(struct ai_controller *ai) {
   if (ai->fifo[ai->fifo_ri].length > 0) {
     unsigned freq = (double) NTSC_DAC_FREQ / (ai->regs[AI_DACRATE_REG] + 1);
     unsigned samples = ai->fifo[ai->fifo_ri].length / 4;
+
+    {
+      static int aihash_on = -1;
+      static unsigned aihash_n = 0;
+      if (aihash_on < 0) aihash_on = getenv("CEN64_AI_HASH") != NULL;
+      if (aihash_on) {
+        uint32_t i, h = 2166136261u, length = ai->fifo[ai->fifo_ri].length;
+        const uint8_t *input = bus->ri->ram + ai->fifo[ai->fifo_ri].address;
+        for (i = 0; i < length; i++) { h ^= input[i]; h *= 16777619u; }
+        printf("AIH,%u,%u,%08x\n", aihash_n++, length, h);
+        {
+          static FILE *dump = NULL; const char *e = getenv("CEN64_AI_DUMP");
+          if (e && !dump) dump = fopen(e, "wb");
+          if (dump) { fwrite(input, 1, length, dump); fflush(dump); }
+        }
+      }
+    }
 
     // Shovel things into the audio context.
     if (ai->no_output)

@@ -16,6 +16,7 @@
 #include "rsp/interface.h"
 
 // DMA into the RSP's memory space.
+extern int rsp_audtask_active;
 void rsp_dma_read(struct rsp *rsp) {
   /* count DMAs into IMEM (ucode loads + F3DEX2 overlay swaps, i.e. clipping) */
   extern unsigned rspstat_imem_dma;
@@ -45,6 +46,12 @@ void rsp_dma_read(struct rsp *rsp) {
       uint32_t word;
 
       bus_read_word(rsp->bus, source_addr, &word);
+      if (rsp_audtask_active && !(dest_addr & 0x1000)) {
+        extern uint32_t rsp_audtask_rhash;
+        uint32_t v[2] = { source_addr, word }, k, m;
+        for (m = 0; m < 2; m++)
+          for (k = 0; k < 4; k++) { rsp_audtask_rhash ^= (v[m] >> (24 - 8 * k)) & 0xFF; rsp_audtask_rhash *= 16777619u; }
+      }
 
       // Update opcode cache.
       if (dest_addr & 0x1000) {
@@ -62,6 +69,8 @@ void rsp_dma_read(struct rsp *rsp) {
     rsp->regs[RSP_CP0_REGISTER_DMA_CACHE] += length;
   } while(++i <= count);
 }
+
+extern int rsp_audtask_active;
 
 // DMA from the RSP's memory space.
 void rsp_dma_write(struct rsp *rsp) {
@@ -83,6 +92,22 @@ void rsp_dma_write(struct rsp *rsp) {
     uint32_t dest = rsp->regs[RSP_CP0_REGISTER_DMA_DRAM] & 0x7FFFFC;
     uint32_t source = rsp->regs[RSP_CP0_REGISTER_DMA_CACHE] & 0x1FFC;
     j = 0;
+    if (rsp_audtask_active) {
+      static int atd_on = -1, atd_dump = -2;
+      extern unsigned rsp_audtask_cur;
+      if (atd_on < 0) { atd_on = getenv("CEN64_AUDTASK_DMA") != NULL; atd_dump = getenv("CEN64_AUDTASK_DUMP") ? atoi(getenv("CEN64_AUDTASK_DUMP")) : -1; }
+      if (atd_on) {
+        uint32_t k, h = 2166136261u;
+        for (k = 0; k < length; k += 4) {
+          uint32_t w, b;
+          memcpy(&w, rsp->mem + ((source + k) & 0x1FFC), sizeof(w));
+          if (!(((source + k) & 0x1FFC) & 0x1000)) w = byteswap_32(w);
+          for (b = 0; b < 4; b++) { h ^= (w >> (24 - 8 * b)) & 0xFF; h *= 16777619u; }
+          if ((int) rsp_audtask_cur == atd_dump) printf("ATW,%u,%06x,%03x,%08x\n", rsp_audtask_cur, dest + k, (source + k) & 0x1FFC, w);
+        }
+        printf("ATD,%u,%06x,%03x,%u,%08x\n", rsp_audtask_cur, dest, source, length, h);
+      }
+    }
 
     do {
       uint32_t source_addr = (source + j) & 0x1FFC;
@@ -95,6 +120,12 @@ void rsp_dma_write(struct rsp *rsp) {
         word = byteswap_32(word);
 
       bus_write_word(rsp->bus, dest_addr, word, ~0U);
+      if (rsp_audtask_active) {
+        extern uint32_t rsp_audtask_hash;
+        uint32_t v[2] = { dest_addr, word }, k, m;
+        for (m = 0; m < 2; m++)
+          for (k = 0; k < 4; k++) { rsp_audtask_hash ^= (v[m] >> (24 - 8 * k)) & 0xFF; rsp_audtask_hash *= 16777619u; }
+      }
       j += 4;
     } while (j < length);
 

@@ -9,6 +9,9 @@
 //
 
 #include "common.h"
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
 #include "bus/address.h"
 #include "bus/controller.h"
 #include "rdp/interface.h"
@@ -92,6 +95,45 @@ uint32_t rsp_read_cp0_reg(struct rsp *rsp, unsigned src) {
 }
 
 // Updates the SP_STATUS register according to bitmask in rt.
+int rsp_audtask_on = -1, rsp_audtask_active = 0;
+uint32_t rsp_audtask_hash = 2166136261u;
+uint32_t rsp_audtask_rhash = 2166136261u;
+static unsigned rsp_audtask_n = 0;
+unsigned rsp_audtask_cur = 0;
+
+static uint32_t rsp_audtask_dmem_word(struct rsp *rsp, unsigned offset) {
+  uint32_t w;
+  memcpy(&w, rsp->mem + offset, sizeof(w));
+  return byteswap_32(w);
+}
+
+static void rsp_audtask_start(struct rsp *rsp) {
+  if (rsp_audtask_on < 0) rsp_audtask_on = getenv("CEN64_AUDTASK_HASH") != NULL;
+  if (!rsp_audtask_on) return;
+  if (rsp_audtask_active)
+    printf("ATO,%u,%08x,%08x\n", rsp_audtask_n - 1, rsp_audtask_hash, rsp_audtask_rhash);
+  rsp_audtask_active = 0;
+  if (rsp_audtask_dmem_word(rsp, 0xFC0) == 2) {           // OSTask.type == M_AUDTASK
+    uint32_t ptr = rsp_audtask_dmem_word(rsp, 0xFC0 + 0x30) & 0x7FFFFC;
+    uint32_t size = rsp_audtask_dmem_word(rsp, 0xFC0 + 0x34), i, h = 2166136261u;
+    for (i = 0; i < size; i += 4) {
+      uint32_t w, k;
+      bus_read_word(rsp->bus, ptr + i, &w);
+      for (k = 0; k < 4; k++) { h ^= (w >> (24 - 8 * k)) & 0xFF; h *= 16777619u; }
+    }
+    {
+      static int clr = -1;
+      if (clr < 0) clr = getenv("CEN64_AUDTASK_CLEAR") != NULL;
+      if (clr) memset(rsp->mem, 0, 0xFC0);
+    }
+    rsp_audtask_cur = rsp_audtask_n;
+    printf("ATI,%u,%u,%08x\n", rsp_audtask_n++, size, h);
+    rsp_audtask_active = 1;
+    rsp_audtask_hash = 2166136261u;
+    rsp_audtask_rhash = 2166136261u;
+  }
+}
+
 void rsp_status_write(struct rsp *rsp, uint32_t rt) {
   uint32_t prev_status, status;
 
@@ -105,6 +147,7 @@ void rsp_status_write(struct rsp *rsp, uint32_t rt) {
       rsp_pipeline_init(&rsp->pipeline);
       rsp->pipeline.ifrd_latch.pc = pc;
       rsp_prof_task_start(rsp);
+      rsp_audtask_start(rsp);
 
       status &= ~SP_STATUS_HALT;
     }
