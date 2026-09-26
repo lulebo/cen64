@@ -553,7 +553,7 @@ static struct rdpstat_t rdpstat;
 #define OV_MAXPIX (640 * 480)
 struct ovprim {
 	uint32_t grp, kind, cyc, omhi, omlo, cchi, cclo;
-	uint32_t px, zfail, afail, wdir, wdep, odir, odep, fin, spans, rows, above, amax, base;
+	uint32_t px, zfail, zcpass, zcfail, afail, wdir, wdep, odir, odep, fin, spans, rows, above, amax, base;
 	int32_t yh, yl;
 };
 struct ovgrp { uint32_t hi, lo; };
@@ -733,6 +733,11 @@ static void ov_frame_end(unsigned frame)
 		if (ov_base[i]) ov_prim[ov_base[i] - 1].base++;
 	}
 	memset(g, 0, sizeof(struct gs) * ov_ngrp);
+	{
+		uint64_t zp = 0, zf = 0;
+		for (i = 0; i < ov_nprim; i++) { zp += ov_prim[i].zcpass; zf += ov_prim[i].zcfail; }
+		printf("OVZ,%u,%llu,%llu,%u\n", frame, (unsigned long long)zp, (unsigned long long)zf, ov_nprim);
+	}
 	for (i = 0; i < ov_nprim; i++) {
 		struct ovprim *p = &ov_prim[i];
 		struct gs *s = &g[p->grp];
@@ -753,10 +758,10 @@ static void ov_frame_end(unsigned frame)
 		if (p->cyc == 1 && p->amax == 0) s->fogfree_px2 += p->px;
 		tot_px1 += px1; tot_px2 += px2; tot_pxf += pxf; tot_fin += p->fin;
 		if (ov_perprim && (frame % ov_every) == 0)
-			printf("OVP,%u,%u,%u,%u,%u,%08x,%08x,%08x,%08x,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%d,%d,%u\n",
+			printf("OVP,%u,%u,%u,%u,%u,%08x,%08x,%08x,%08x,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%d,%d,%u,%u,%u\n",
 			       frame, i, p->grp, p->kind, p->cyc, p->omhi, p->omlo, p->cchi, p->cclo,
 			       p->px, p->zfail, p->afail, p->wdir, p->wdep, p->odir, p->odep, p->fin,
-			       p->spans, p->rows, p->above, p->amax, p->yh, p->yl, p->base);
+			       p->spans, p->rows, p->above, p->amax, p->yh, p->yl, p->base, p->zcpass, p->zcfail);
 	}
 	{
 		int a, b;
@@ -7456,6 +7461,7 @@ static void rdpstat_dump_fb(void)
    first, so the second is stale buffer memory that the RDP does not read. */
 static int cmdhash_on = -1;
 static uint32_t cmdhash_h = 2166136261u, cmdhash_n = 0, cmdhash_t = 2166136261u, cmdhash_tn = 0;
+static uint32_t cmdhash_nz = 2166136261u, cmdhash_tnz = 2166136261u;
 static void rdpstat_log_cmd(uint32_t cmd, uint32_t cmd_length)
 {
 	static int inited = 0; static unsigned from = 1, to = 0; const char *e; uint32_t i;
@@ -7466,8 +7472,17 @@ static void rdpstat_log_cmd(uint32_t cmd, uint32_t cmd_length)
 	if (cmdhash_on < 0) cmdhash_on = getenv("CEN64_CMD_HASH") != NULL;
 	if (cmdhash_on) {
 		uint32_t hash_len = (cmd == 0x00 || (cmd >= 0x26 && cmd <= 0x29)) ? 1 : cmd_length;
+		int tri = cmd >= 0x08 && cmd <= 0x0F;
+		uint32_t zstart = (tri && (cmd & 1)) ? cmd_length - 4 : hash_len;
+		uint32_t t0 = 8 + ((cmd & 4) ? 16 : 0);
 		for (i = 0; i < hash_len; i++) {
 			uint32_t w = rdp_cmd_data[rdp_cmd_cur + i], k;
+			if (i < zstart) {
+				uint32_t wn = w;
+				if (tri && (cmd & 2) && i > t0 && i < t0 + 16 && ((i - t0) & 1)) wn &= 0xFFFF0000u;
+				for (k = 0; k < 4; k++) { cmdhash_nz ^= (wn >> (24 - 8 * k)) & 0xFF; cmdhash_nz *= 16777619u; }
+				if (tri) for (k = 0; k < 4; k++) { cmdhash_tnz ^= (wn >> (24 - 8 * k)) & 0xFF; cmdhash_tnz *= 16777619u; }
+			}
 			for (k = 0; k < 4; k++) { cmdhash_h ^= (w >> (24 - 8 * k)) & 0xFF; cmdhash_h *= 16777619u; }
 			if (cmd >= 0x08 && cmd <= 0x0F)
 				for (k = 0; k < 4; k++) { cmdhash_t ^= (w >> (24 - 8 * k)) & 0xFF; cmdhash_t *= 16777619u; }
@@ -7485,8 +7500,8 @@ static void rdpstat_report(void)
 {
 	rdpstat_dump_fb();
 	if (cmdhash_on > 0) {
-		printf("CMDH,%u,%u,%08x,%u,%08x\n", rdpstat.frame, cmdhash_n, cmdhash_h, cmdhash_tn, cmdhash_t);
-		cmdhash_h = 2166136261u; cmdhash_n = 0; cmdhash_t = 2166136261u; cmdhash_tn = 0;
+		printf("CMDH,%u,%u,%08x,%u,%08x,%08x,%08x\n", rdpstat.frame, cmdhash_n, cmdhash_h, cmdhash_tn, cmdhash_t, cmdhash_nz, cmdhash_tnz);
+		cmdhash_h = 2166136261u; cmdhash_n = 0; cmdhash_t = 2166136261u; cmdhash_tn = 0; cmdhash_nz = 2166136261u; cmdhash_tnz = 2166136261u;
 	}
 	printf("RDP,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%08x,%u\n",
 	       rdpstat.frame, rdpstat.tris, rdpstat.tris_cycle[0], rdpstat.tris_cycle[1],
@@ -8997,6 +9012,7 @@ static inline uint32_t dz_compress(uint32_t value)
 	return j;
 }
 
+static uint32_t ov_tr_oz, ov_tr_dzmem, ov_tr_dznew, ov_tr_dzpix, ov_tr_zmode;
 static inline uint32_t z_compare_impl(uint32_t zcurpixel, uint32_t sz, uint16_t dzpix, int dzpixenc, uint32_t* blend_en, uint32_t* prewrap, uint32_t* curpixel_cvg, uint32_t curpixel_memcvg)
 {
 	rdpstat.zread++;
@@ -9063,6 +9079,7 @@ static inline uint32_t z_compare_impl(uint32_t zcurpixel, uint32_t sz, uint16_t 
 
 		dznotshift = dznew;
 		dznew <<= 3;
+		ov_tr_oz = oz; ov_tr_dzmem = dzmem; ov_tr_dznew = dznew; ov_tr_dzpix = dzpix; ov_tr_zmode = other_modes.z_mode;
 
 		farther = force_coplanar || ((sz + dznew) >= oz);
 		
@@ -9160,11 +9177,21 @@ static inline uint32_t z_compare(uint32_t zcurpixel, uint32_t sz, uint16_t dzpix
 		uint32_t cp = zcurpixel - (zb_address >> 1);
 		ov_px_hit = ov_px_match(cp);
 		if (ov_px_hit)
-			printf("PIX,%u,prim %u,grp %05x/%08x,cyc %d,L %08x,sz %05x,zpass %u,cvg %u->%u,memcvg %u,blend_en %u,prewrap %u\n",
+			printf("PIX,%u,prim %u,grp %05x/%08x,cyc %d,L %08x,sz %05x,oz %05x,zmode %u,dzpix %u,dzmem %u,dznew %u,zpass %u,cvg %u->%u,memcvg %u,blend_en %u,prewrap %u\n",
 			       rdpstat.frame, ov_cur, ov_grp[ov_prim[ov_cur].grp].hi, ov_grp[ov_prim[ov_cur].grp].lo,
-			       other_modes.cycle_type, ov_omlo, sz & 0x3ffff, r, cvg_in, *curpixel_cvg, curpixel_memcvg, *blend_en, *prewrap);
+			       other_modes.cycle_type, ov_omlo, sz & 0x3ffff, ov_tr_oz, ov_tr_zmode, ov_tr_dzpix, ov_tr_dzmem, ov_tr_dznew, r, cvg_in, *curpixel_cvg, curpixel_memcvg, *blend_en, *prewrap);
 		OV_P.px++;
 		if (!r) OV_P.zfail++;
+		if (other_modes.z_compare_en && ov_tr_oz != 0x3ffff) {
+			int32_t zd = (int32_t)(sz & 0x3ffff) - (int32_t)ov_tr_oz;
+			if (zd >= -32 && zd <= 32) {
+				static int zlog_inited; static uint32_t zlog_om; static int zlog_on;
+				if (r) OV_P.zcpass++; else OV_P.zcfail++;
+				if (!zlog_inited) { const char *e = getenv("CEN64_ZCLOSE_LOG"); zlog_inited = 1; if (e) { zlog_on = 1; zlog_om = (uint32_t)strtoul(e, NULL, 16); } }
+				if (zlog_on && ov_omlo == zlog_om && ov_fbw)
+					printf("ZC,%u,%u,%u,%u,%05x,%05x,%u\n", rdpstat.frame, ov_cur, cp % ov_fbw, cp / ov_fbw, sz & 0x3ffff, ov_tr_oz, r);
+			}
+		}
 		if ((uint32_t)shade_color.a > OV_P.amax) OV_P.amax = (uint32_t)shade_color.a;
 		if (fb_address == ov_fb && cp < OV_MAXPIX && ov_nproc[cp] < 0xffff) ov_nproc[cp]++;
 	}
