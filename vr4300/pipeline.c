@@ -102,6 +102,9 @@ static int vr4300_rf_stage(struct vr4300 *vr4300) {
     paddr = (vr4300->cp0.pfn[index][select]) | (vaddr & page_mask);
   }
 
+  if (g_itrace_on && cached)
+    itrace_fetch(paddr);
+
   // If not cached or we miss in the IC, it's an ICB.
   line = vr4300_icache_probe(&vr4300->icache, vaddr, paddr);
 
@@ -295,6 +298,9 @@ static int vr4300_dc_stage(struct vr4300 *vr4300) {
       uint32_t s_paddr;
 
       line = vr4300_dcache_probe(&vr4300->dcache, vaddr, paddr);
+
+      if (g_dtrace_on && cached)
+        dtrace_event(paddr, exdc_latch->request.type == VR4300_BUS_REQUEST_WRITE ? 1 : 0);
 
       if (g_dacc_hi && cached && (paddr & 0x1FFFFFFF) >= g_dacc_lo && (paddr & 0x1FFFFFFF) < g_dacc_hi)
         dacc_hit(paddr & 0x1FFFFFFF, (uint32_t) exdc_latch->common.pc);

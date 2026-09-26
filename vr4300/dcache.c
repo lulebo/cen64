@@ -169,3 +169,8 @@ struct vr4300_dcache_line *vr4300_dcache_wb_invalidate(
   return NULL;
 }
 
+
+struct vr4300_dcache_line *vr4300_dcache_index_line(struct vr4300_dcache *dcache, uint64_t vaddr) {
+  struct vr4300_dcache_line *line = get_line(dcache, vaddr);
+  return is_valid(line) ? line : NULL;
+}

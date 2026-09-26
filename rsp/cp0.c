@@ -125,9 +125,12 @@ static void rsp_audtask_start(struct rsp *rsp) {
   if (rsp_audtask_dmem_word(rsp, 0xFC0) == 2) {           // OSTask.type == M_AUDTASK
     uint32_t ptr = rsp_audtask_dmem_word(rsp, 0xFC0 + 0x30) & 0x7FFFFC;
     uint32_t size = rsp_audtask_dmem_word(rsp, 0xFC0 + 0x34), i, h = 2166136261u;
+    static int cmddump = -2;
+    if (cmddump == -2) cmddump = getenv("CEN64_AUDTASK_CMDDUMP") ? atoi(getenv("CEN64_AUDTASK_CMDDUMP")) : -1;
     for (i = 0; i < size; i += 4) {
       uint32_t w, k;
       bus_read_word(rsp->bus, ptr + i, &w);
+      if ((int) rsp_audtask_n == cmddump) printf("ATC,%u,%u,%08x\n", rsp_audtask_n, i, w);
       for (k = 0; k < 4; k++) { h ^= (w >> (24 - 8 * k)) & 0xFF; h *= 16777619u; }
     }
     {

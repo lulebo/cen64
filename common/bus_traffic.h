@@ -40,6 +40,17 @@ void drange_reset(void);
 void drange_dump(const char *path);
 extern int g_drange_n;
 #define DRANGE_FILL(pa, pc) do { if (g_drange_n) drange_fill((pa), (pc)); } while (0)
+/* CEN64_DTRACE: data access / D-cache op events (see vr4300/cpu.c) */
+extern int g_dtrace_on;
+void dtrace_event(uint32_t addr, unsigned kind);
+void dtrace_start(void);
+void dtrace_stop(void);
+#define DTRACE(a, k) do { if (g_dtrace_on) dtrace_event((a), (k)); } while (0)
+/* CEN64_ITRACE: instruction fetch runs (see vr4300/cpu.c) */
+extern int g_itrace_on;
+void itrace_fetch(uint32_t paddr);
+void itrace_start(void);
+void itrace_stop(void);
 #define PROF_REGION (8 * 1024 * 1024)
 #define PROF_REGIONS 6 /* ins, l1d (misses + uncached), cycles, icache, dirty write-backs, uncached RDRAM */
 #endif

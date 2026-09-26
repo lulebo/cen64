@@ -1,3 +1,4 @@
+#include <stdlib.h>
 //
 // vr4300/functions.c: VR4300 execution functions.
 //
@@ -556,6 +557,7 @@ cen64_cold static int vr4300_cacheop_dc_set_taglo(
   struct vr4300 *vr4300, uint64_t vaddr, uint32_t paddr) {
   vr4300_dcache_set_taglo(&vr4300->dcache, vaddr,
     vr4300->regs[VR4300_CP0_REGISTER_TAGLO]);
+  DTRACE((uint32_t) vaddr, 7);
 
   return 0;
 }
@@ -563,13 +565,26 @@ cen64_cold static int vr4300_cacheop_dc_set_taglo(
 cen64_cold static int vr4300_cacheop_dc_wb_invalidate(
   struct vr4300 *vr4300, uint64_t vaddr, uint32_t paddr) {
   struct vr4300_dcache_line *line;
+  DTRACE((uint32_t) vaddr, 2);
 
   uint32_t bus_address;
   uint32_t data[4];
   unsigned i;
 
-  if (!(line = vr4300_dcache_wb_invalidate(&vr4300->dcache, vaddr)))
-    return 0;
+  {
+    static int inited = 0; static uint32_t nlo = 0, nhi = 0;
+    uint32_t pc = (uint32_t) vr4300->pipeline.exdc_latch.common.pc;
+    if (!inited) {
+      const char *e = getenv("CEN64_NOINV_PC"); char *end;
+      inited = 1;
+      if (e) { nlo = (uint32_t) strtoul(e, &end, 16); if (*end == ':') nhi = (uint32_t) strtoul(end + 1, NULL, 16); }
+    }
+    if (pc >= nlo && pc < nhi) {
+      line = vr4300_dcache_index_line(&vr4300->dcache, vaddr);
+      if (!line) return 0;
+    } else if (!(line = vr4300_dcache_wb_invalidate(&vr4300->dcache, vaddr)))
+      return 0;
+  }
 
   if (line->metadata & 0x2) {
     bus_address = vr4300_dcache_get_tag(line, vaddr);
@@ -595,6 +610,7 @@ cen64_cold static int vr4300_cacheop_dc_wb_invalidate(
 cen64_cold static int vr4300_cacheop_dc_create_dirty_ex(
   struct vr4300 *vr4300, uint64_t vaddr, uint32_t paddr) {
   struct vr4300_dcache_line *line;
+  DTRACE(paddr, 3);
 
   uint32_t bus_address;
   uint32_t data[4];
@@ -626,6 +642,7 @@ cen64_cold static int vr4300_cacheop_dc_create_dirty_ex(
 cen64_cold static int vr4300_cacheop_dc_hit_invalidate(
   struct vr4300 *vr4300, uint64_t vaddr, uint32_t paddr) {
   struct vr4300_dcache_line *line;
+  DTRACE(paddr, 4);
 
   if ((line = vr4300_dcache_probe(&vr4300->dcache, vaddr, paddr)))
     vr4300_dcache_invalidate(line);
@@ -636,6 +653,7 @@ cen64_cold static int vr4300_cacheop_dc_hit_invalidate(
 cen64_cold static int vr4300_cacheop_dc_hit_wb_invalidate(
   struct vr4300 *vr4300, uint64_t vaddr, uint32_t paddr) {
   struct vr4300_dcache_line *line;
+  DTRACE(paddr, 5);
 
   uint32_t bus_address;
   uint32_t data[4];
@@ -669,6 +687,7 @@ cen64_cold static int vr4300_cacheop_dc_hit_wb_invalidate(
 cen64_cold static int vr4300_cacheop_dc_hit_wb(
   struct vr4300 *vr4300, uint64_t vaddr, uint32_t paddr) {
   struct vr4300_dcache_line *line;
+  DTRACE(paddr, 6);
 
   uint32_t bus_address;
   uint32_t data[4];

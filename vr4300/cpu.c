@@ -100,6 +100,85 @@ void drange_dump(const char *path) {
 }
 uint64_t *g_dline_prof = NULL;
 
+/* CEN64_DTRACE */
+int g_dtrace_on = 0;
+static FILE *dtrace_f = NULL;
+static uint32_t dtrace_last = 0xFFFFFFFF, dtrace_max = 0, dtrace_n = 0;
+static uint64_t dtrace_fill0, dtrace_wb0, dtrace_op0;
+static uint32_t dtrace_buf[65536];
+static unsigned dtrace_bn = 0;
+void dtrace_start(void) {
+  const char *e = getenv("CEN64_DTRACE"), *m = getenv("CEN64_DTRACE_N");
+  if (!e || dtrace_f) return;
+  dtrace_f = fopen(e, "wb");
+  if (!dtrace_f) return;
+  dtrace_max = m ? (uint32_t) strtoul(m, NULL, 0) : 8u << 20;
+  dtrace_n = dtrace_bn = 0; dtrace_last = 0xFFFFFFFF;
+  dtrace_fill0 = g_bus.cpu_dfill; dtrace_wb0 = g_bus.cpu_dwb; dtrace_op0 = g_bus.cpu_dwb_op;
+  g_dtrace_on = 1;
+}
+void dtrace_stop(void) {
+  if (!g_dtrace_on) return;
+  fwrite(dtrace_buf, 4, dtrace_bn, dtrace_f);
+  fclose(dtrace_f);
+  g_dtrace_on = 0;
+  printf("DTRACE,%u,%llu,%llu,%llu\n", (unsigned) dtrace_n, (unsigned long long) (g_bus.cpu_dfill - dtrace_fill0),
+         (unsigned long long) (g_bus.cpu_dwb - dtrace_wb0), (unsigned long long) (g_bus.cpu_dwb_op - dtrace_op0));
+}
+void dtrace_event(uint32_t addr, unsigned kind) {
+  uint32_t ev = ((addr & 0x0FFFFFFCu) << 1) | kind;   /* word address << 3 | kind */
+  if (ev == dtrace_last) return;
+  dtrace_last = ev;
+  dtrace_buf[dtrace_bn++] = ev;
+  dtrace_n++;
+  if (dtrace_bn == sizeof(dtrace_buf) / sizeof(dtrace_buf[0])) { fwrite(dtrace_buf, 4, dtrace_bn, dtrace_f); dtrace_bn = 0; }
+  if (dtrace_n >= dtrace_max) dtrace_stop();
+}
+
+/* CEN64_ITRACE */
+int g_itrace_on = 0;
+static FILE *itrace_f = NULL;
+static uint32_t itrace_start_pc = 0, itrace_len = 0, itrace_max = 0, itrace_n = 0;
+static uint64_t itrace_fill0 = 0, itrace_cyc0 = 0;
+static uint32_t itrace_buf[2 * 65536];
+static unsigned itrace_bn = 0;
+static void itrace_emit(void) {
+  if (!itrace_len) return;
+  itrace_buf[itrace_bn++] = itrace_start_pc;
+  itrace_buf[itrace_bn++] = itrace_len;
+  itrace_n++;
+  if (itrace_bn == sizeof(itrace_buf) / sizeof(itrace_buf[0])) {
+    fwrite(itrace_buf, 4, itrace_bn, itrace_f);
+    itrace_bn = 0;
+  }
+}
+void itrace_start(void) {
+  const char *e = getenv("CEN64_ITRACE"), *m = getenv("CEN64_ITRACE_RUNS");
+  if (!e || itrace_f) return;
+  itrace_f = fopen(e, "wb");
+  if (!itrace_f) return;
+  itrace_max = m ? (uint32_t) strtoul(m, NULL, 0) : 4u << 20;
+  itrace_len = itrace_n = itrace_bn = 0;
+  itrace_fill0 = g_bus.cpu_ifill; itrace_cyc0 = g_bus.cpu_cycles;
+  g_itrace_on = 1;
+}
+void itrace_stop(void) {
+  if (!g_itrace_on) return;
+  itrace_emit();
+  fwrite(itrace_buf, 4, itrace_bn, itrace_f);
+  fclose(itrace_f);
+  g_itrace_on = 0;
+  printf("ITRACE,%u,%llu,%llu\n", (unsigned) itrace_n, (unsigned long long) (g_bus.cpu_ifill - itrace_fill0),
+         (unsigned long long) (g_bus.cpu_cycles - itrace_cyc0));
+}
+void itrace_fetch(uint32_t paddr) {
+  if (itrace_len && paddr == itrace_start_pc + 4 * (itrace_len - 1)) return; /* re-fetch */
+  if (itrace_len && paddr == itrace_start_pc + 4 * itrace_len) { itrace_len++; return; }
+  itrace_emit();
+  if (itrace_n >= itrace_max) { itrace_len = 0; itrace_stop(); return; }
+  itrace_start_pc = paddr; itrace_len = 1;
+}
+
 void vr4300_cycle(struct vr4300 *vr4300) {
   struct vr4300_pipeline *pipeline = &vr4300->pipeline;
 

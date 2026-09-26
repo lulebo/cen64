@@ -36,6 +36,7 @@ struct vr4300_dcache_line* vr4300_dcache_probe(
 void vr4300_dcache_set_dirty(struct vr4300_dcache_line *line);
 struct vr4300_dcache_line *vr4300_dcache_should_flush_line(
   struct vr4300_dcache *dcache, uint64_t vaddr);
+struct vr4300_dcache_line *vr4300_dcache_index_line(struct vr4300_dcache *dcache, uint64_t vaddr);
 struct vr4300_dcache_line *vr4300_dcache_wb_invalidate(
   struct vr4300_dcache *dcache, uint64_t vaddr);
 uint32_t vr4300_dcache_get_taglo(struct vr4300_dcache *dcache,

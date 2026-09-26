@@ -52,7 +52,11 @@ static void profile_window(const char *line) {
   if (!strncmp(line, "BENCH_START,", 12)) {
     memset(&g_bus, 0, sizeof(g_bus));
     if (g_rdram.on) rdram_window_reset();
+    itrace_start();
+    dtrace_start();
   } else if (!strncmp(line, "BENCH_END,", 10)) {
+    itrace_stop();
+    dtrace_stop();
     char name[64]; size_t k = 0;
     const char *p = line + 10;
     while (*p && *p != ',' && *p != '\n' && k < sizeof(name) - 1) name[k++] = *p++;
