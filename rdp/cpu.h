@@ -11,6 +11,7 @@
 #ifndef __rdp_cpu_h__
 #define __rdp_cpu_h__
 #include "common.h"
+#include "bus/rdram_model.h"
 
 enum dp_register {
 #define X(reg) reg,
@@ -63,6 +64,7 @@ static inline void rdp_timing_tick(struct rdp *rdp) {
   struct rdp_timing *t = &rdp->timing;
   if (!t->on) return;
   t->now++;
+  if (g_rdram.on) rdram_tick();
   if (t->head != t->tail && t->now >= t->ring[t->head].finish) rdp_timing_advance(rdp);
 }
 

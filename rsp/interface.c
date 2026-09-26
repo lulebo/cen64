@@ -14,6 +14,8 @@
 #include "rsp/cp0.h"
 #include "rsp/cpu.h"
 #include "rsp/interface.h"
+#include "common/bus_traffic.h"
+#include "bus/rdram_model.h"
 
 // DMA into the RSP's memory space.
 extern int rsp_audtask_active;
@@ -34,6 +36,12 @@ void rsp_dma_read(struct rsp *rsp) {
   // Check length.
   if (((rsp->regs[RSP_CP0_REGISTER_DMA_CACHE] & 0xFFF) + length) > 0x1000)
     length = 0x1000 - (rsp->regs[RSP_CP0_REGISTER_DMA_CACHE] & 0xFFF);
+
+  g_bus.rsp_dma_r++;
+  g_bus.rsp_dma_rb += (uint64_t) length * (count + 1);
+  if (g_rdram.on)
+    rdram_rsp_dma(rsp->regs[RSP_CP0_REGISTER_DMA_DRAM] & 0x7FFFF8, length, count, skip, 0);
+  if (g_rsp_task_is_audio) g_bus.rsp_aud_rb += (uint64_t) length * (count + 1);
 
   do {
     uint32_t source = rsp->regs[RSP_CP0_REGISTER_DMA_DRAM] & 0x7FFFFC;
@@ -87,6 +95,12 @@ void rsp_dma_write(struct rsp *rsp) {
   // Check length.
   if (((rsp->regs[RSP_CP0_REGISTER_DMA_CACHE] & 0xFFF) + length) > 0x1000)
     length = 0x1000 - (rsp->regs[RSP_CP0_REGISTER_DMA_CACHE] & 0xFFF);
+
+  g_bus.rsp_dma_w++;
+  g_bus.rsp_dma_wb += (uint64_t) length * (count + 1);
+  if (g_rdram.on)
+    rdram_rsp_dma(rsp->regs[RSP_CP0_REGISTER_DMA_DRAM] & 0x7FFFF8, length, count, skip, 1);
+  if (g_rsp_task_is_audio) g_bus.rsp_aud_wb += (uint64_t) length * (count + 1);
 
   do {
     uint32_t dest = rsp->regs[RSP_CP0_REGISTER_DMA_DRAM] & 0x7FFFFC;

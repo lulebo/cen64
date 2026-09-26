@@ -68,6 +68,7 @@ static void rdp_timing_init(struct rdp *rdp) {
 }
 
 int rdp_init(struct rdp *rdp, struct bus_controller *bus) {
+  g_rdram_rdp = rdp;
   rdp_timing_init(rdp);
   rdp_connect_bus(rdp, bus);
 

@@ -7,6 +7,8 @@
 
 extern uint64_t *g_vr4300_profile_samples;
 #include "rsp/cpu.h"
+#include "common/bus_traffic.h"
+#include "bus/rdram_model.h"
 
 /* CEN64_PROFILE_DIR: per-benchmark-scenario CPU profiles (see vr4300/cpu.c). */
 static void profile_window(const char *line) {
@@ -47,24 +49,65 @@ static void profile_window(const char *line) {
       }
     }
   }
+  if (!strncmp(line, "BENCH_START,", 12)) {
+    memset(&g_bus, 0, sizeof(g_bus));
+    if (g_rdram.on) rdram_window_reset();
+  } else if (!strncmp(line, "BENCH_END,", 10)) {
+    char name[64]; size_t k = 0;
+    const char *p = line + 10;
+    while (*p && *p != ',' && *p != '\n' && k < sizeof(name) - 1) name[k++] = *p++;
+    name[k] = 0;
+    printf("BUS,%s,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,"
+           "%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu\n", name,
+           (unsigned long long) g_bus.cpu_cycles, (unsigned long long) g_bus.rdp_frames,
+           (unsigned long long) g_bus.cpu_ifill, (unsigned long long) g_bus.cpu_ifetch_unc,
+           (unsigned long long) g_bus.cpu_dfill, (unsigned long long) g_bus.cpu_dwb,
+           (unsigned long long) g_bus.cpu_dwb_op, (unsigned long long) g_bus.cpu_unc_r,
+           (unsigned long long) g_bus.cpu_unc_rb, (unsigned long long) g_bus.cpu_unc_w,
+           (unsigned long long) g_bus.cpu_unc_wb, (unsigned long long) g_bus.cpu_mmio,
+           (unsigned long long) g_bus.rsp_dma_r, (unsigned long long) g_bus.rsp_dma_rb,
+           (unsigned long long) g_bus.rsp_dma_w, (unsigned long long) g_bus.rsp_dma_wb,
+           (unsigned long long) g_bus.rsp_aud_rb, (unsigned long long) g_bus.rsp_aud_wb,
+           (unsigned long long) g_bus.rdp_cmd_b, (unsigned long long) g_bus.rdp_tex_b,
+           (unsigned long long) g_bus.rdp_fbr, (unsigned long long) g_bus.rdp_fbw,
+           (unsigned long long) g_bus.rdp_fill, (unsigned long long) g_bus.rdp_zr,
+           (unsigned long long) g_bus.rdp_zw, (unsigned long long) g_bus.vi_b,
+           (unsigned long long) g_bus.ai_b, (unsigned long long) g_bus.pi_w_b,
+           (unsigned long long) g_bus.pi_r_b, (unsigned long long) 0);
+    if (g_rdram.on) rdram_window_report(name);
+  }
   if (dir == NULL || g_vr4300_profile_samples == NULL) return;
   if (!strncmp(line, "BENCH_START,", 12)) {
-    memset(g_vr4300_profile_samples, 0, 4 * n * sizeof(uint64_t));
+    memset(g_vr4300_profile_samples, 0, PROF_REGIONS * n * sizeof(uint64_t));
+    if (g_dline_prof) memset(g_dline_prof, 0, 2 * DLINES * sizeof(uint64_t));
   } else if (!strncmp(line, "BENCH_END,", 10)) {
     char name[64], path[512]; size_t i, k = 0; FILE *f;
     const char *p = line + 10;
     while (*p && *p != ',' && *p != '\n' && k < sizeof(name) - 1) name[k++] = *p++;
     name[k] = 0;
+    if (g_dline_prof) {
+      snprintf(path, sizeof(path), "%s/%s.dprofile", dir, name);
+      f = fopen(path, "w");
+      if (f != NULL) {
+        for (i = 0; i < DLINES; i++) {
+          if (g_dline_prof[i] || g_dline_prof[DLINES + i])
+            fprintf(f, "%x %llu %llu\n", (unsigned) (i << 4), (unsigned long long) g_dline_prof[i],
+                    (unsigned long long) g_dline_prof[DLINES + i]);
+        }
+        fclose(f);
+      }
+    }
     snprintf(path, sizeof(path), "%s/%s.profile", dir, name);
     f = fopen(path, "w");
     if (f == NULL) return;
     for (i = 0; i < n; i++) {
       uint64_t ins = g_vr4300_profile_samples[i], l1d = g_vr4300_profile_samples[i + n],
-               cyc = g_vr4300_profile_samples[i + 2 * n], ic = g_vr4300_profile_samples[i + 3 * n];
-      if (cyc < 20 && ins < 20 && l1d < 20 && ic < 20) continue;
-      fprintf(f, "%x %llu %llu %llu %llu\n", (unsigned) (i + 0x80000000),
+               cyc = g_vr4300_profile_samples[i + 2 * n], ic = g_vr4300_profile_samples[i + 3 * n],
+               wb = g_vr4300_profile_samples[i + 4 * n], unc = g_vr4300_profile_samples[i + 5 * n];
+      if (cyc < 20 && ins < 20 && l1d < 20 && ic < 20 && wb == 0 && unc == 0) continue;
+      fprintf(f, "%x %llu %llu %llu %llu %llu %llu\n", (unsigned) (i + 0x80000000),
               (unsigned long long) ins, (unsigned long long) l1d, (unsigned long long) cyc,
-              (unsigned long long) ic);
+              (unsigned long long) ic, (unsigned long long) wb, (unsigned long long) unc);
     }
     fclose(f);
   }

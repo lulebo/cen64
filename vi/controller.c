@@ -17,6 +17,7 @@
 #include "timer.h"
 #include "ri/controller.h"
 #include "vi/controller.h"
+#include "bus/rdram_model.h"
 #include "vi/render.h"
 #include "vi/window.h"
 #include "vr4300/interface.h"
@@ -79,6 +80,24 @@ void vi_cycle(struct vi_controller *vi) {
   // We use a counter so we don't have to recalc each cycle.
   if (unlikely(counter == vi->intr_counter))
     signal_rcp_interrupt(vi->bus->vr4300, MI_INTR_VI);
+
+  // -rdram: one refresh per line, and the line fetch of every active line.
+  if (g_rdram.on) {
+    static unsigned last_line = ~0u;
+    unsigned line = (unsigned) (((uint64_t) ((unsigned) VI_COUNTER_START - counter)) * 2 / 7937);
+    if (line != last_line) {
+      unsigned vs = vi->regs[VI_V_START_REG], type = vi->regs[VI_STATUS_REG] & 3;
+      unsigned first = (vs >> 16 & 0x3FF) >> 1, last = (vs & 0x3FF) >> 1;
+      last_line = line;
+      rdram_refresh();
+      if (type >= 2 && line >= first && line < last) {
+        unsigned width = vi->regs[VI_WIDTH_REG] & 0xFFF, bpp = type == 3 ? 4 : 2;
+        unsigned yscale = vi->regs[VI_Y_SCALE_REG] & 0xFFF;
+        unsigned fbline = (line - first) * yscale / 1024;
+        rdram_vi_line((vi->regs[VI_ORIGIN_REG] & 0xFFFFFF) + fbline * width * bpp, width * bpp);
+      }
+    }
+  }
 
   // NTSC reserves the first 39 lines for vertical blanking
   // according to the literature I've read. Normally after this

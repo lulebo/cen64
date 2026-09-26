@@ -108,6 +108,10 @@ int write_dp_regs(void *opaque, uint32_t address, uint32_t word, uint32_t dqm) {
           e->cur = e->next = start;
           e->finish = t->busy_until;
           e->kind = 1;
+          if (g_rdram.on) {
+            e->finish = UINT64_MAX;
+            rdram_rdp_mark(t->tail);
+          }
           t->tail = (t->tail + 1) & (RDP_TIMING_RING - 1);
           t->start_valid++;
         } else {

@@ -25,12 +25,16 @@ const char *mi_register_mnemonics[NUM_MI_REGISTERS] = {
 #endif
 
 uint64_t *g_vr4300_profile_samples = NULL;
+#include "common/bus_traffic.h"
+struct bus_traffic g_bus;
+uint64_t *g_dline_prof = NULL;
 
 void vr4300_cycle(struct vr4300 *vr4300) {
   struct vr4300_pipeline *pipeline = &vr4300->pipeline;
 
   // Increment counters.
   vr4300->regs[VR4300_CP0_REGISTER_COUNT]++;
+  g_bus.cpu_cycles++;
 
   // Profiling: charge this cycle to the instruction in the DC stage, so that a
   // stall lands on the load/store (or the instruction after an I-fetch) that
@@ -79,8 +83,9 @@ int vr4300_init(struct vr4300 *vr4300, struct bus_controller *bus, bool profilin
   vr4300->mi_regs[MI_INIT_MODE_REG] = 0x80;
 
   if (profiling) {
-    vr4300->profile_samples = calloc(4 * 8 * 1024 * 1024, sizeof(uint64_t));
+    vr4300->profile_samples = calloc(PROF_REGIONS * PROF_REGION, sizeof(uint64_t));
     g_vr4300_profile_samples = vr4300->profile_samples;
+    g_dline_prof = calloc(2 * DLINES, sizeof(uint64_t));
   } else
     vr4300->profile_samples = NULL;
 

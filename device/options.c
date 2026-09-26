@@ -71,6 +71,21 @@ int parse_options(struct cen64_options *options, int argc, const char *argv[]) {
     else if (!strcmp(argv[i], "-rdptime"))
       options->rdp_timing = true;
 
+    else if (!strcmp(argv[i], "-rdram")) {
+      options->rdram = true;
+      options->rdp_timing = true;
+    }
+
+    else if (!strcmp(argv[i], "-rdrammodel")) {
+      if ((i + 1) >= argc) {
+        printf("-rdrammodel requires name=value[,name=value...] (see bus/rdram_model.c).\n\n");
+        return 1;
+      }
+      options->rdram = true;
+      options->rdp_timing = true;
+      options->rdram_params = argv[++i];
+    }
+
     else if (!strcmp(argv[i], "-rspslow")) {
       if ((i + 1) >= argc)
         return 1;
@@ -318,6 +333,8 @@ void print_command_line_usage(const char *invokation_string) {
       "                               NOTE: the debugger is not implemented yet.\n"
       "  -profile                   : Profile the ROM (cpu-side).\n"
       "  -multithread               : Run in a threaded (but quasi-accurate) mode.\n"
+      "  -rdram                     : RDRAM contention model (implies -rdptime).\n"
+      "  -rdrammodel name=v,...     : RDRAM model parameters (implies -rdram).\n"
       "                             : This mode cannot be run with the debugger.\n"
       "  -ddipl <path>              : Path to the 64DD IPL ROM (enables 64DD mode).\n"
       "  -ddrom <path>              : Path to the 64DD disk ROM (requires -ddipl).\n"

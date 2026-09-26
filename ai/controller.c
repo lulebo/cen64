@@ -12,6 +12,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include "ai/context.h"
+#include "common/bus_traffic.h"
 #include "ai/controller.h"
 #include "bus/address.h"
 #include "bus/controller.h"
@@ -66,6 +67,7 @@ void ai_dma(struct ai_controller *ai) {
   if (ai->fifo[ai->fifo_ri].length > 0) {
     unsigned freq = (double) NTSC_DAC_FREQ / (ai->regs[AI_DACRATE_REG] + 1);
     unsigned samples = ai->fifo[ai->fifo_ri].length / 4;
+    g_bus.ai_b += ai->fifo[ai->fifo_ri].length;
 
     {
       static int aihash_on = -1;

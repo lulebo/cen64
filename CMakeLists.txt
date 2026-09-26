@@ -265,6 +265,7 @@ set(ARCH_X86_64_SOURCES
 
 set(BUS_SOURCES
   ${PROJECT_SOURCE_DIR}/bus/controller.c
+  ${PROJECT_SOURCE_DIR}/bus/rdram_model.c
   ${PROJECT_SOURCE_DIR}/bus/memorymap.c
 )
 

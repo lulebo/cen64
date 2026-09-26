@@ -35,6 +35,8 @@ struct cen64_options {
   bool rdp_timing;
   unsigned rsp_slow;
   const char *rdp_model;
+  bool rdram;
+  const char *rdram_params;
   bool rsp_profile;
   bool multithread;
   bool no_audio;

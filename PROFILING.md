@@ -156,3 +156,54 @@ The `RSPHW,` line then reads instructions, load-freeze cycles, vector stall cycl
 command word, and over the triangle commands (0x08-0x0F) alone. The second word of no-op and
 sync commands is skipped (microcodes only write the first; the rest is stale buffer memory the
 RDP does not read). Used to prove that two microcodes produce identical output.
+
+## RDRAM traffic counters (`BUS,` lines)
+
+Every `BENCH_END,` IS-Viewer line prints
+`BUS,<name>,<cpu cycles>,<rdp full syncs>,<cpu I fills>,<uncached I fetches>,<D fills>,<dirty D write-backs on a miss>,
+<write-backs by cache instructions>,<uncached RDRAM reads>,<bytes>,<uncached writes>,<bytes>,<uncached non-RDRAM accesses>,
+<RSP DMAs in>,<bytes>,<RSP DMAs out>,<bytes>,<audio task bytes in>,<out>,<RDP command bytes>,<texture load bytes>,
+<fb pixels read>,<written>,<filled>,<z read>,<z written>,<VI bytes>,<AI bytes>,<PI bytes cart->RDRAM>,<RDRAM->cart>,0`
+(counts since `BENCH_START,`). With `CEN64_PROFILE_DIR`, the CPU profile gains two columns
+(`pc ins l1d cyc ic dwb unc`: dirty write-backs charged to the load/store or cache instruction that
+caused them, uncached RDRAM accesses), and `<name>.dprofile` lists D-cache fills and write-backs per
+16-byte RDRAM line (`addr fills writebacks`): which data, not which code, costs RAM reads.
+
+## RDRAM contention model (`-rdram`, `-rdrammodel name=value,...`)
+
+cen64 charges every CPU cache miss a fixed number of cycles and completes RSP DMAs, RDP memory
+accesses and VI fetches instantly, so no agent ever waits for another. `-rdram` (implies `-rdptime`,
+needs the default single-threaded loop) books every transaction on one RDRAM channel instead:
+
+- The channel serves transactions first-come-first-served in RDRAM clocks (4 ns, 4 per RCP cycle).
+  Cost = `req + rdelay` (read) or `req + wdelay` (write) `+ bytes * per_byte`, plus `row_miss` when
+  the bank's open row is another one. Banks are `2^bank_bits` bytes (1 MB), each keeps one open row
+  of `2^row_bits` bytes (2 KB). A refresh per VI line costs `refresh` clocks and closes all rows
+  (`refresh_close`).
+- CPU: D-cache fills (16 bytes), I-cache fills (32), uncached reads stall for `cpu_d` / `cpu_i` /
+  `cpu_unc` cycles outside the RDRAM plus the actual wait and service time; a dirty victim is
+  written back behind the fill without stalling; cache-instruction write-backs stall `cpu_wb` +
+  wait + service; uncached writes go through a one-entry write buffer (`cpu_uncw`).
+- RSP: a DMA is split into bursts of at most `burst` bytes inside one row; SP_DMA_BUSY / SP_DMA_FULL
+  (and the SP_STATUS bits) stay set until the bursts are done. The data still moves at once.
+- RDP: while angrylion executes a command it emits the work: the command fetch (in `cmd_fetch`
+  chunks), `cmd` cycles (+ `tri`, `rect`, `sync`), texture/TLUT load rows plus `tmem8` cycles per
+  8 bytes, and per span: z read (z compare), colour read (image read), `px1`/`px2` cycles per pixel
+  (1-/2-cycle; `fill`/`copy` for those modes) + `span`, colour write, z write (z update). The work is
+  replayed on the RDP's own clock through the channel (`overlap=1`: a span's pixel cycles overlap
+  its transfers). An idle RDP pays `idle` cycles before its first transaction. DPC_CURRENT, the
+  busy bits and the DP interrupt follow the replay, as with `-rdptime`.
+- VI: one fetch of `VI_WIDTH * bpp` bytes per active line; PI: cart -> RDRAM writes in 128-byte
+  bursts `pi_gap` RCP cycles apart. AI and SI are not modelled (tiny).
+
+`RDRAM,<name>,<window clocks>,<cpu stall cycles>,<what an idle channel would have cost>,<rdp busy clocks>,
+<rsp dma busy clocks>,<agent>:<transactions>:<bytes>:<busy clocks>:<wait clocks>:<row hits>:<row misses>...`
+is printed at every `BENCH_END,` (agents cpu_i, cpu_d, cpu_wb, cpu_unc, rsp, rdp_cmd, rdp_tex, rdp_fb,
+rdp_z, vi, pi, refresh), and the `RDPT,` busy column becomes the replayed RDP time.
+
+Defaults are calibrated against a ModRetro M64 (firmware 1.8.0 beta), not against a console: the
+Super Mario 64 port's HWSTATS line at two views (BoB and castle-grounds spawns), with and without
+its RDP-overlap pipeline, match within ~7% rms in fps, CPU, RSP and RDP-tail time. RDRAM-datasheet
+style values (`rdelay=7,row_miss=25,span=4,cpu_d=39.25,cpu_i=40.25,cpu_unc=29.5,px1=1,px2=2`) give
+a faster RDP and less CPU slowdown. Use the model for relative comparisons (does a change lower the
+channel load, does the RDP get more of it), then confirm on hardware.

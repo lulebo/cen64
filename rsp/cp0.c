@@ -19,6 +19,7 @@
 #include "rsp/cpu.h"
 #include "rsp/decoder.h"
 #include "rsp/interface.h"
+#include "bus/rdram_model.h"
 #include "vr4300/interface.h"
 #ifdef _WIN32
   #include <windows.h>
@@ -58,6 +59,11 @@ uint32_t rsp_read_cp0_reg(struct rsp *rsp, unsigned src) {
 
   switch(src) {
     case RSP_CP0_REGISTER_SP_STATUS:
+      if (g_rdram.on) {
+        unsigned n = rdram_rsp_dma_inflight();
+        return *((volatile uint32_t *) &rsp->regs[RSP_CP0_REGISTER_SP_STATUS]) |
+          (n >= 1 ? SP_STATUS_DMA_BUSY : 0) | (n >= 2 ? SP_STATUS_DMA_FULL : 0);
+      }
       return *((volatile uint32_t *) &rsp->regs[RSP_CP0_REGISTER_SP_STATUS]);
 
     case RSP_CP0_REGISTER_SP_RESERVED:
@@ -70,8 +76,9 @@ uint32_t rsp_read_cp0_reg(struct rsp *rsp, unsigned src) {
 #endif
 
     case RSP_CP0_REGISTER_DMA_FULL:
+      return g_rdram.on && rdram_rsp_dma_inflight() >= 2;
     case RSP_CP0_REGISTER_DMA_BUSY:
-      return 0;
+      return g_rdram.on && rdram_rsp_dma_inflight() >= 1;
 
     // RDP aliases.
     case RSP_CP0_REGISTER_CMD_START:
@@ -107,7 +114,9 @@ static uint32_t rsp_audtask_dmem_word(struct rsp *rsp, unsigned offset) {
   return byteswap_32(w);
 }
 
+int g_rsp_task_is_audio = 0;
 static void rsp_audtask_start(struct rsp *rsp) {
+  g_rsp_task_is_audio = rsp_audtask_dmem_word(rsp, 0xFC0) == 2; /* OSTask.type == M_AUDTASK */
   if (rsp_audtask_on < 0) rsp_audtask_on = getenv("CEN64_AUDTASK_HASH") != NULL;
   if (!rsp_audtask_on) return;
   if (rsp_audtask_active)

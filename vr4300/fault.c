@@ -9,6 +9,8 @@
 //
 
 #include "common.h"
+#include "common/bus_traffic.h"
+#include "bus/rdram_model.h"
 #include "bus/controller.h"
 #include "vr4300/cp0.h"
 #include "vr4300/cpu.h"
@@ -254,6 +256,18 @@ void VR4300_DCM(struct vr4300 *vr4300) {
   if (!exdc_latch->cached) {
     unsigned mask = request->access_type ==
       VR4300_ACCESS_DWORD ? 0x7 : 0x3;
+    uint32_t model_paddr = paddr;
+
+    if (paddr < 0x00800000) {
+      unsigned nb = request->access_type == VR4300_ACCESS_DWORD ? 8 : 4;
+      if (exdc_latch->request.type == VR4300_BUS_REQUEST_READ) { g_bus.cpu_unc_r++; g_bus.cpu_unc_rb += nb; }
+      else { g_bus.cpu_unc_w++; g_bus.cpu_unc_wb += nb; }
+      if (vr4300->profile_samples) {
+        uint32_t idx = (exdc_latch->common.pc - 0x80000000) & (PROF_REGION - 1);
+        vr4300->profile_samples[idx + 5 * PROF_REGION]++;
+      }
+    } else
+      g_bus.cpu_mmio++;
 
     // Service a read.
     if (exdc_latch->request.type == VR4300_BUS_REQUEST_READ) {
@@ -294,12 +308,21 @@ void VR4300_DCM(struct vr4300 *vr4300) {
       bus_write_word(vr4300->bus, paddr, data, dqm);
     }
 
+    if (g_rdram.on && model_paddr < 0x00800000) {
+      unsigned nb = request->access_type == VR4300_ACCESS_DWORD ? 8 : 4, st;
+      st = exdc_latch->request.type == VR4300_BUS_REQUEST_READ
+        ? rdram_cpu_read(model_paddr, nb, RA_CPU_UNC) : rdram_cpu_uncached_write(model_paddr, nb);
+      vr4300_common_interlocks(vr4300, st > 2 ? st - 2 : 0, 2);
+      return;
+    }
     vr4300_common_interlocks(vr4300, MEMORY_WORD_DELAY, 2);
     return;
   }
 
   // Cached accesses require us to potentially flush the old line.
   // In addition to that, we also need to pull in the next one.
+  uint32_t model_victim = 0;
+  int model_has_victim = 0;
   if ((line = vr4300_dcache_should_flush_line(
     &vr4300->dcache, vaddr)) != NULL) {
     uint32_t bus_address;
@@ -310,11 +333,27 @@ void VR4300_DCM(struct vr4300 *vr4300) {
     for (i = 0; i < 4; i++)
       bus_write_word(vr4300->bus, bus_address + i * 4,
         data[i ^ (WORD_ADDR_XOR >> 2)], ~0);
+
+    g_bus.cpu_dwb++;
+    DLINE_WB(bus_address);
+    model_victim = bus_address;
+    model_has_victim = 1;
+    if (vr4300->profile_samples) {
+      uint32_t idx = (exdc_latch->common.pc - 0x80000000) & (PROF_REGION - 1);
+      vr4300->profile_samples[idx + 4 * PROF_REGION]++;
+    }
   }
+  g_bus.cpu_dfill++;
+  DLINE_FILL(paddr);
 
   // Raise interlock condition, get virtual address.
-  vr4300_common_interlocks(vr4300, DCACHE_ACCESS_DELAY, 1);
   paddr &= ~0xF;
+  if (g_rdram.on) {
+    unsigned st = rdram_cpu_read(paddr, 16, RA_CPU_D);
+    if (model_has_victim) rdram_cpu_victim(model_victim);
+    vr4300_common_interlocks(vr4300, st > 2 ? st - 2 : 0, 1);
+  } else
+    vr4300_common_interlocks(vr4300, DCACHE_ACCESS_DELAY, 1);
 
   // Fill the cache line.
   for (i = 0; i < 4; i++)
@@ -371,6 +410,11 @@ void VR4300_ICB(struct vr4300 *vr4300) {
   if (!rfex_latch->cached) {
     bus_read_word(vr4300->bus, paddr, &rfex_latch->iw);
     delay = MEMORY_WORD_DELAY;
+    g_bus.cpu_ifetch_unc++;
+    if (g_rdram.on && paddr < 0x00800000) {
+      unsigned st = rdram_cpu_read(paddr, 4, RA_CPU_UNC);
+      delay = st > 2 ? st - 2 : 0;
+    }
   }
 
   else {
@@ -382,10 +426,15 @@ void VR4300_ICB(struct vr4300 *vr4300) {
     // Fill the cache line.
     for (i = 0; i < 8; i ++)
       bus_read_word(vr4300->bus, paddr + i * 4, line + i);
+    g_bus.cpu_ifill++;
 
     memcpy(&rfex_latch->iw, line + (vaddr >> 2 & 0x7), sizeof(rfex_latch->iw));
     vr4300_icache_fill(&vr4300->icache, icrf_latch->common.pc, paddr, line);
     delay = ICACHE_ACCESS_DELAY;
+    if (g_rdram.on) {
+      unsigned st = rdram_cpu_read(paddr, 32, RA_CPU_I);
+      delay = st > 2 ? st - 2 : 0;
+    }
   }
 
   vr4300_common_interlocks(vr4300, delay, 4);

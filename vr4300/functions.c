@@ -12,6 +12,9 @@
   (VR4300_##func)
 
 #include "common.h"
+#include "common/bus_traffic.h"
+#include "bus/rdram_model.h"
+#define RDRAM_WB_DELAY(pa) (g_rdram.on ? (int) rdram_cpu_cacheop_wb(pa) : DCACHE_ACCESS_DELAY)
 #include "bus/controller.h"
 #include "vr4300/cp0.h"
 #include "vr4300/cp1.h"
@@ -575,9 +578,15 @@ cen64_cold static int vr4300_cacheop_dc_wb_invalidate(
     for (i = 0; i < 4; i++)
       bus_write_word(vr4300->bus, bus_address + i * 4,
         data[i ^ (WORD_ADDR_XOR >> 2)], ~0);
+    g_bus.cpu_dwb_op++;
+    DLINE_WB(bus_address);
+    if (vr4300->profile_samples) {
+      uint32_t idx = ((uint32_t) vr4300->pipeline.exdc_latch.common.pc - 0x80000000) & (PROF_REGION - 1);
+      vr4300->profile_samples[idx + 4 * PROF_REGION]++;
+    }
 
     line->metadata &= ~0x2;
-    return DCACHE_ACCESS_DELAY;
+    return RDRAM_WB_DELAY(bus_address);
   }
 
   return 0;
@@ -600,8 +609,14 @@ cen64_cold static int vr4300_cacheop_dc_create_dirty_ex(
     for (i = 0; i < 4; i++)
       bus_write_word(vr4300->bus, bus_address + i * 4,
         data[i ^ (WORD_ADDR_XOR >> 2)], ~0);
+    g_bus.cpu_dwb_op++;
+    DLINE_WB(bus_address);
+    if (vr4300->profile_samples) {
+      uint32_t idx = ((uint32_t) vr4300->pipeline.exdc_latch.common.pc - 0x80000000) & (PROF_REGION - 1);
+      vr4300->profile_samples[idx + 4 * PROF_REGION]++;
+    }
 
-    delay = DCACHE_ACCESS_DELAY;
+    delay = RDRAM_WB_DELAY(bus_address);
   }
 
   vr4300_dcache_create_dirty_exclusive(&vr4300->dcache, vaddr, paddr);
@@ -636,9 +651,15 @@ cen64_cold static int vr4300_cacheop_dc_hit_wb_invalidate(
     for (i = 0; i < 4; i++)
       bus_write_word(vr4300->bus, bus_address + i * 4,
         data[i ^ (WORD_ADDR_XOR >> 2)], ~0);
+    g_bus.cpu_dwb_op++;
+    DLINE_WB(bus_address);
+    if (vr4300->profile_samples) {
+      uint32_t idx = ((uint32_t) vr4300->pipeline.exdc_latch.common.pc - 0x80000000) & (PROF_REGION - 1);
+      vr4300->profile_samples[idx + 4 * PROF_REGION]++;
+    }
 
     line->metadata &= ~0x1;
-    return DCACHE_ACCESS_DELAY;
+    return RDRAM_WB_DELAY(bus_address);
   }
 
   line->metadata &= ~0x1;
@@ -663,10 +684,16 @@ cen64_cold static int vr4300_cacheop_dc_hit_wb(
     for (i = 0; i < 4; i++)
       bus_write_word(vr4300->bus, bus_address + i * 4,
         data[i ^ (WORD_ADDR_XOR >> 2)], ~0);
+    g_bus.cpu_dwb_op++;
+    DLINE_WB(bus_address);
+    if (vr4300->profile_samples) {
+      uint32_t idx = ((uint32_t) vr4300->pipeline.exdc_latch.common.pc - 0x80000000) & (PROF_REGION - 1);
+      vr4300->profile_samples[idx + 4 * PROF_REGION]++;
+    }
 
     // TODO: Technically, it's clean now...
     line->metadata &= ~0x2;
-    return DCACHE_ACCESS_DELAY;
+    return RDRAM_WB_DELAY(bus_address);
   }
 
   return 0;

@@ -545,6 +545,8 @@ struct rdpstat_t {
     unsigned spans;
 };
 static struct rdpstat_t rdpstat;
+#include "common/bus_traffic.h"
+#include "bus/rdram_model.h"
 #include <stdlib.h>
 
 /* --- Overdraw tracer: CEN64_OVERDRAW="<from>:<to>[:<dir>[:p]]" (see PROFILING.md) --- */
@@ -1403,6 +1405,7 @@ static inline void vi_fetch_filter16(CCVG* res, uint32_t fboffset, uint32_t cur_
 	uint32_t idx = (fboffset >> 1) + cur_x;
 	uint32_t pix, hval;
 	uint32_t cur_cvg;
+	g_bus.vi_b += 2;
 	if (fsaa)
 	{
 		PAIRREAD16(pix, hval, idx);
@@ -1440,6 +1443,7 @@ static inline void vi_fetch_filter32(CCVG* res, uint32_t fboffset, uint32_t cur_
 {
 	int r, g, b;
 	uint32_t pix, addr = (fboffset >> 2) + cur_x;
+	g_bus.vi_b += 4;
 	RREADIDX32(pix, addr);
 	uint32_t cur_cvg;
 	if (fsaa)
@@ -4446,6 +4450,20 @@ static inline void tc_pipeline_load(int32_t* sss, int32_t* sst, int tilenum, int
 
 
 
+/* -rdram: one span's memory traffic and pixel cycles for the RDRAM model */
+static void rdram_span_hook(int i, int flip)
+{
+	int lx = span[i].lx, rx = span[i].rx;
+	int len = (flip ? lx - rx : rx - lx) + 1;
+	int xmin = lx < rx ? lx : rx;
+	int bpp4 = fb_size == PIXEL_SIZE_4BIT ? 1 : fb_size == PIXEL_SIZE_8BIT ? 2 : fb_size == PIXEL_SIZE_16BIT ? 4 : 8;
+	uint32_t px = (uint32_t) fb_width * (uint32_t) i + (uint32_t) xmin;
+	if (len <= 0) return;
+	rdram_rdp_span(fb_address + px * bpp4 / 2, zb_address + px * 2, len, bpp4, other_modes.cycle_type & 3,
+	               other_modes.image_read_en, other_modes.z_compare_en, other_modes.z_update_en);
+}
+#define RDRAM_SPAN(i, flip) do { if (g_rdram.on) rdram_span_hook((i), (flip)); } while (0)
+
 void render_spans_1cycle_complete(int start, int end, int tilenum, int flip)
 {
 	int zb = zb_address >> 1;
@@ -4515,7 +4533,7 @@ void render_spans_1cycle_complete(int start, int end, int tilenum, int flip)
 	{
 		if (span[i].validline)
 		{
-		rdpstat.spans++; ov_span();
+		rdpstat.spans++; ov_span(); RDRAM_SPAN(i, flip);
 
 		xstart = span[i].lx;
 		xend = span[i].unscrx;
@@ -4725,7 +4743,7 @@ void render_spans_1cycle_notexel1(int start, int end, int tilenum, int flip)
 	{
 		if (span[i].validline)
 		{
-		rdpstat.spans++; ov_span();
+		rdpstat.spans++; ov_span(); RDRAM_SPAN(i, flip);
 
 		xstart = span[i].lx;
 		xend = span[i].unscrx;
@@ -4887,7 +4905,7 @@ void render_spans_1cycle_notex(int start, int end, int tilenum, int flip)
 	{
 		if (span[i].validline)
 		{
-		rdpstat.spans++; ov_span();
+		rdpstat.spans++; ov_span(); RDRAM_SPAN(i, flip);
 
 		xstart = span[i].lx;
 		xend = span[i].unscrx;
@@ -5040,7 +5058,7 @@ void render_spans_2cycle_complete(int start, int end, int tilenum, int flip)
 	{
 		if (span[i].validline)
 		{
-		rdpstat.spans++; ov_span();
+		rdpstat.spans++; ov_span(); RDRAM_SPAN(i, flip);
 
 		xstart = span[i].lx;
 		xend = span[i].unscrx;
@@ -5250,7 +5268,7 @@ void render_spans_2cycle_notexelnext(int start, int end, int tilenum, int flip)
 	{
 		if (span[i].validline)
 		{
-		rdpstat.spans++; ov_span();
+		rdpstat.spans++; ov_span(); RDRAM_SPAN(i, flip);
 
 		xstart = span[i].lx;
 		xend = span[i].unscrx;
@@ -5419,7 +5437,7 @@ void render_spans_2cycle_notexel1(int start, int end, int tilenum, int flip)
 	{
 		if (span[i].validline)
 		{
-		rdpstat.spans++; ov_span();
+		rdpstat.spans++; ov_span(); RDRAM_SPAN(i, flip);
 
 		xstart = span[i].lx;
 		xend = span[i].unscrx;
@@ -5576,7 +5594,7 @@ void render_spans_2cycle_notex(int start, int end, int tilenum, int flip)
 	{
 		if (span[i].validline)
 		{
-		rdpstat.spans++; ov_span();
+		rdpstat.spans++; ov_span(); RDRAM_SPAN(i, flip);
 
 		xstart = span[i].lx;
 		xend = span[i].unscrx;
@@ -5691,7 +5709,7 @@ void render_spans_fill(int start, int end, int flip)
 
 		if (span[i].validline)
 		{
-		rdpstat.spans++; ov_span();
+		rdpstat.spans++; ov_span(); RDRAM_SPAN(i, flip);
 			if (unlikely(fastkillbits && length >= 0))
 			{
 				if (!onetimewarnings.fillmbitcrashes)
@@ -5779,7 +5797,7 @@ void render_spans_copy(int start, int end, int tilenum, int flip)
 	{
 		if (span[i].validline)
 		{
-		rdpstat.spans++; ov_span();
+		rdpstat.spans++; ov_span(); RDRAM_SPAN(i, flip);
 
 		s = span[i].s;
 		t = span[i].t;
@@ -5964,6 +5982,9 @@ void loading_pipeline(int start, int end, int tilenum, int coord_quad, int ltlut
 		tiptr = ti_address + PIXELS_TO_BYTES(ti_index, ti_size);
 
 		length = (xstart - xend + 1) & 0xfff;
+		if (g_rdram.on)
+			rdram_rdp_texload(tiptr, ltlut ? (uint32_t) PIXELS_TO_BYTES(length, ti_size)
+			                               : (uint32_t) ((length + spanadvance - 1) / spanadvance) * 8);
 
 		
 		for (j = 0; j < length; j+= spanadvance)
@@ -5988,6 +6009,7 @@ void loading_pipeline(int start, int end, int tilenum, int coord_quad, int ltlut
 			get_tmem_idx(sss, sst, tilenum, &tmemidx0, &tmemidx1, &tmemidx2, &tmemidx3, &bit3fl, &hibit);
 
 			readidx32 = (tiptr >> 2) & ~1;
+			g_bus.rdp_tex_b += 8;
 			RREADIDX32(readval0, readidx32);
 			readidx32++;
 			RREADIDX32(readval1, readidx32);
@@ -7508,6 +7530,11 @@ static void rdpstat_report(void)
 	       rdpstat.tris_cycle[2], rdpstat.tris_cycle[3], rdpstat.rects, rdpstat.fillrects,
 	       rdpstat.tmem_loads, rdpstat.fbwrite, rdpstat.fbfill, rdpstat.fbread,
 	       rdpstat.zread, rdpstat.zwrite, rdpstat_fbhash(), rspstat_imem_dma);
+	if (cen64->rdp.timing.on && g_rdram.on) {
+		static uint64_t last_busy = 0;
+		cen64->rdp.timing.stat_busy_frame = (g_rdram.rdp_busy_total - last_busy) / 4;
+		last_busy = g_rdram.rdp_busy_total;
+	}
 	if (cen64->rdp.timing.on) {
 		struct rdp_timing *t = &cen64->rdp.timing;
 		printf("RDPT,%u,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu\n", rdpstat.frame, (unsigned long long) t->stat_busy_frame,
@@ -7518,6 +7545,8 @@ static void rdpstat_report(void)
 		t->fspans = t->fspansfb = t->fspansz = 0;
 	}
 	rspstat_imem_dma = 0;
+	g_bus.rdp_fbr += rdpstat.fbread; g_bus.rdp_fbw += rdpstat.fbwrite; g_bus.rdp_fill += rdpstat.fbfill;
+	g_bus.rdp_zr += rdpstat.zread; g_bus.rdp_zw += rdpstat.zwrite; g_bus.rdp_frames++;
 	ov_frame_end(rdpstat.frame);
 	fflush(stdout);
 	rdpstat.frame++;
@@ -8049,6 +8078,24 @@ static void rdp_timing_account(uint32_t cmd, uint32_t addr, uint32_t len, const 
 	unsigned px = px_w > px_z ? px_w : px_z;
 	double cost = t->ccmd;
 	uint64_t start;
+	if (g_rdram.on) {
+		// -rdram: the cost is the replayed work; the entry finishes when the model reaches its mark
+		t->fcmd++;
+		if (cmd >= 8 && cmd <= 15) t->ftri++;
+		if (((t->tail + 1) & (RDP_TIMING_RING - 1)) == t->head) {
+			rdram_rdp_flush();
+			t->now = t->ring[t->head].finish;
+			rdp_timing_advance(&cen64->rdp);
+		}
+		e = &t->ring[t->tail];
+		e->cur = addr;
+		e->next = addr + len;
+		e->finish = UINT64_MAX;
+		e->kind = cmd == 0x29 ? 2 : 0;
+		rdram_rdp_mark(t->tail);
+		t->tail = (t->tail + 1) & (RDP_TIMING_RING - 1);
+		return;
+	}
 	t->fcmd++;
 	if (cmd >= 8 && cmd <= 15) { cost += t->ctri; t->ftri++; }
 	else if (cmd == 0x24 || cmd == 0x25 || cmd == 0x36) cost += t->crect;
@@ -8147,6 +8194,7 @@ void rdp_process_list(void)
 	}
 	else
 	{
+		g_bus.rdp_cmd_b += 4 * (uint64_t) toload;
 		for (i = 0; i < toload; i ++)
 		{
 			RREADIDX32(rdp_cmd_data[rdp_cmd_ptr], dp_current_al);
@@ -8206,6 +8254,7 @@ void rdp_process_list(void)
 		if (cen64->rdp.timing.on) {
 			struct rdpstat_t before = rdpstat;
 			uint32_t addr = (chunk_word + (rdp_cmd_cur > ptr_onstart ? rdp_cmd_cur - ptr_onstart : 0)) << 2;
+			if (g_rdram.on) rdram_rdp_cmd_begin(cmd, addr, cmd_length << 2, (dp_status & DP_STATUS_XBUS_DMA) != 0);
 			rdp_command_table[cmd](rdp_cmd_data[rdp_cmd_cur+0], rdp_cmd_data[rdp_cmd_cur + 1]);
 			rdp_timing_account(cmd, addr, cmd_length << 2, &before);
 		} else
