@@ -32,6 +32,10 @@ extern uint64_t *g_dline_prof;
 #define DLINE_WB(pa) do { if (g_dline_prof) g_dline_prof[DLINES + (((pa) & 0x7FFFFF) >> 4)]++; } while (0)
 /* CEN64_DRANGE: D-cache fills inside physical ranges, per (range, PC) */
 void drange_fill(uint32_t paddr, uint32_t pc);
+extern uint32_t g_dacc_lo, g_dacc_hi;
+void dacc_hit(uint32_t paddr, uint32_t pc);
+void dacc_dump(const char *path);
+void dacc_reset(void);
 void drange_reset(void);
 void drange_dump(const char *path);
 extern int g_drange_n;

@@ -29,11 +29,13 @@ uint64_t *g_vr4300_profile_samples = NULL;
 struct bus_traffic g_bus;
 
 int g_drange_n = 0;
-static uint32_t drange_lo[8], drange_hi[8];
+static uint32_t drange_lo[8], drange_hi[8], drange_stride = 0;
 #define DRANGE_HASH (1 << 16)
-static struct { uint32_t key_pc; uint8_t range; uint8_t used; uint64_t fills; } drange_tab[DRANGE_HASH];
+static struct { uint32_t key_pc; uint8_t range; uint8_t used; uint16_t slot; uint64_t fills; } drange_tab[DRANGE_HASH];
 static void drange_init(void) {
   const char *e = getenv("CEN64_DRANGE");
+  const char *st = getenv("CEN64_DRANGE_STRIDE"); /* range 0: key also by (addr - lo) % stride / 16 */
+  if (st) drange_stride = (uint32_t) strtoul(st, NULL, 16);
   while (e && *e && g_drange_n < 8) {
     char *end;
     drange_lo[g_drange_n] = (uint32_t) strtoul(e, &end, 16);
@@ -48,13 +50,44 @@ void drange_fill(uint32_t paddr, uint32_t pc) {
   paddr &= 0x1FFFFFFF;
   for (r = 0; r < g_drange_n; r++) {
     if (paddr >= drange_lo[r] && paddr < drange_hi[r]) {
-      uint32_t h = ((pc >> 2) * 2654435761u + r) & (DRANGE_HASH - 1), n;
+      uint16_t slot = (r == 0 && drange_stride) ? (uint16_t) (((paddr - drange_lo[0]) % drange_stride) >> 4) : 0;
+      uint32_t h = ((pc >> 2) * 2654435761u + r * 977u + slot * 131u) & (DRANGE_HASH - 1), n;
       for (n = 0; n < DRANGE_HASH; n++, h = (h + 1) & (DRANGE_HASH - 1)) {
-        if (!drange_tab[h].used) { drange_tab[h].used = 1; drange_tab[h].key_pc = pc; drange_tab[h].range = (uint8_t) r; }
-        if (drange_tab[h].key_pc == pc && drange_tab[h].range == r) { drange_tab[h].fills++; break; }
+        if (!drange_tab[h].used) { drange_tab[h].used = 1; drange_tab[h].key_pc = pc; drange_tab[h].range = (uint8_t) r; drange_tab[h].slot = slot; }
+        if (drange_tab[h].key_pc == pc && drange_tab[h].range == r && drange_tab[h].slot == slot) { drange_tab[h].fills++; break; }
       }
     }
   }
+}
+uint32_t g_dacc_lo = 0, g_dacc_hi = 0;
+static uint32_t dacc_stride = 0;
+#define DACC_HASH (1 << 18)
+static struct { uint32_t pc; uint16_t off; uint8_t used; uint64_t n; } dacc_tab[DACC_HASH];
+static void dacc_init(void) {
+  const char *e = getenv("CEN64_DACCESS");
+  char *end;
+  if (!e) return;
+  g_dacc_lo = (uint32_t) strtoul(e, &end, 16);
+  if (*end == ':') g_dacc_hi = (uint32_t) strtoul(end + 1, &end, 16);
+  if (*end == ':') dacc_stride = (uint32_t) strtoul(end + 1, &end, 16);
+  if (!dacc_stride) dacc_stride = 0x100000;
+}
+void dacc_hit(uint32_t paddr, uint32_t pc) {
+  uint16_t off = (uint16_t) (((paddr - g_dacc_lo) % dacc_stride) >> 2);
+  uint32_t h = ((pc >> 2) * 2654435761u + off * 40503u) & (DACC_HASH - 1), n;
+  for (n = 0; n < DACC_HASH; n++, h = (h + 1) & (DACC_HASH - 1)) {
+    if (!dacc_tab[h].used) { dacc_tab[h].used = 1; dacc_tab[h].pc = pc; dacc_tab[h].off = off; }
+    if (dacc_tab[h].pc == pc && dacc_tab[h].off == off) { dacc_tab[h].n++; return; }
+  }
+}
+void dacc_reset(void) { memset(dacc_tab, 0, sizeof(dacc_tab)); }
+void dacc_dump(const char *path) {
+  FILE *f; unsigned i;
+  if (!g_dacc_hi || !(f = fopen(path, "w"))) return;
+  for (i = 0; i < DACC_HASH; i++)
+    if (dacc_tab[i].used)
+      fprintf(f, "%x %x %llu\n", dacc_tab[i].pc, (unsigned) dacc_tab[i].off * 4, (unsigned long long) dacc_tab[i].n);
+  fclose(f);
 }
 void drange_reset(void) { memset(drange_tab, 0, sizeof(drange_tab)); }
 void drange_dump(const char *path) {
@@ -62,7 +95,7 @@ void drange_dump(const char *path) {
   if (!g_drange_n || !(f = fopen(path, "w"))) return;
   for (i = 0; i < DRANGE_HASH; i++)
     if (drange_tab[i].used)
-      fprintf(f, "%u %x %llu\n", drange_tab[i].range, drange_tab[i].key_pc, (unsigned long long) drange_tab[i].fills);
+      fprintf(f, "%u %x %llu %u\n", drange_tab[i].range, drange_tab[i].key_pc, (unsigned long long) drange_tab[i].fills, (unsigned) drange_tab[i].slot);
   fclose(f);
 }
 uint64_t *g_dline_prof = NULL;
@@ -125,6 +158,7 @@ int vr4300_init(struct vr4300 *vr4300, struct bus_controller *bus, bool profilin
     g_vr4300_profile_samples = vr4300->profile_samples;
     g_dline_prof = calloc(2 * DLINES, sizeof(uint64_t));
     drange_init();
+    dacc_init();
   } else
     vr4300->profile_samples = NULL;
 

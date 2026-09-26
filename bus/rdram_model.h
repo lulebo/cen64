@@ -46,6 +46,7 @@ struct rdram_params {
   double idle;       // RCP cycles an idle RDP needs before its first transaction
   double cpu_bus, rsp_bus; // experiments: share of their transactions' time the CPU / RSP hold the channel
   double cpu_rows, rsp_rows; // experiments: 1 = their open rows are tracked apart (never share a bank)
+  double iso1_lo, iso1_hi, iso2_lo, iso2_hi, iso3_lo, iso3_hi; // experiments: address ranges (physical) with a bank of their own
 };
 #define RDRAM_NPARAMS 30
 
@@ -56,6 +57,8 @@ struct rdram_model {
   uint64_t now;       // RDRAM clocks
   uint64_t bus_free;  // the channel is free from here
   int32_t open_row[32];
+  int8_t row_owner[32];
+  uint64_t conflict[RA_N][RA_N][8];
   struct rdram_params p;
   struct rdram_stat st[RA_N];
   uint64_t cpu_stall, cpu_idle;   // CPU stall cycles charged / what an idle channel would cost

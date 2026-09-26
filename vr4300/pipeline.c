@@ -9,6 +9,7 @@
 //
 
 #include "common.h"
+#include "common/bus_traffic.h"
 #include "bus/controller.h"
 #include "vr4300/cp0.h"
 #include "vr4300/cpu.h"
@@ -294,6 +295,9 @@ static int vr4300_dc_stage(struct vr4300 *vr4300) {
       uint32_t s_paddr;
 
       line = vr4300_dcache_probe(&vr4300->dcache, vaddr, paddr);
+
+      if (g_dacc_hi && cached && (paddr & 0x1FFFFFFF) >= g_dacc_lo && (paddr & 0x1FFFFFFF) < g_dacc_hi)
+        dacc_hit(paddr & 0x1FFFFFFF, (uint32_t) exdc_latch->common.pc);
 
       if (cached) {
         bool last_cache_was_store = dcwb_latch->last_op_was_cache_store;
