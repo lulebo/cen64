@@ -334,6 +334,89 @@ static void rsp_hw_classify(const struct rsp_opcode *op, uint32_t iw, struct rsp
   d->sread &= ~1u; // $zero
 }
 
+// ---------------------------------------------------------------------------
+// -rspmister: RSP timing of the MiSTer N64 core (MiSTer-devel/N64_MiSTer,
+// rtl/RSP_core.vhd), for predicting FPGA RSP time:
+// - single issue, one instruction per cycle, taken branches without a bubble;
+// - a scalar DMEM load (lb/lbu/lh/lhu/lw/lwu) or mfc0 freezes the pipeline
+//   until its writeback: 2 extra cycles, whether or not the result is used;
+// - a COP2 instruction whose vs field (bits 15..11) or vt field (bits 20..16),
+//   or a vector store whose vt field, names the target of one of the last
+//   three decode cycles' COP2 instructions or vector loads stalls 3, 2 or 1
+//   cycles. The core compares raw fields, so the element field of vrcp/vmov,
+//   the scalar register of mfc2/mtc2 and the target of mfc2/cfc2 (their rd)
+//   create dependencies too. Freeze cycles do not advance that window.
+// ---------------------------------------------------------------------------
+static int rsp_mister_hazard(const struct rsp_hwtiming *hw, unsigned a, unsigned b) {
+  int d;
+  for (d = 0; d < 3; d++) {
+    if (!hw->mw_valid[d])
+      continue;
+    if (hw->mw_transp[d]) {
+      if ((a >> 3) == (hw->mw_target[d] >> 3u) || (b >> 3) == (hw->mw_target[d] >> 3u))
+        return d + 1;
+    } else if (a == hw->mw_target[d] || b == hw->mw_target[d])
+      return d + 1;
+  }
+  return 0;
+}
+
+static int rsp_mister_cost(struct rsp *rsp) {
+  struct rsp_hwtiming *hw = &rsp->hw;
+  uint32_t iw = rsp->pipeline.rdex_latch.iw;
+  unsigned op = iw >> 26, rs = (iw >> 21) & 31, rt = (iw >> 16) & 31, rd = (iw >> 11) & 31;
+  int dist = 0, d;
+
+  if (op == 0x12)
+    dist = rsp_mister_hazard(hw, rd, rt);
+  else if (op == 0x3A) {
+    if (rd == 0x0B) {
+      for (d = 0; d < 3; d++)
+        if (hw->mw_valid[d] && (rt >> 3) == (hw->mw_target[d] >> 3u)) { dist = d + 1; break; }
+    } else
+      dist = rsp_mister_hazard(hw, rt, rt);
+  }
+  hw->pend_freeze = (op == 0x20 || op == 0x21 || op == 0x23 || op == 0x24 || op == 0x25 || op == 0x27
+                     || (op == 0x10 && rs == 0));
+  hw->pend_extra = dist ? 4 - dist : 0;
+  hw->pend_pair = false;
+  hw->pend_cost = 1 + hw->pend_extra + (hw->pend_freeze ? 2 : 0);
+  return hw->pend_cost;
+}
+
+static void rsp_mister_commit(struct rsp *rsp) {
+  struct rsp_hwtiming *hw = &rsp->hw;
+  uint32_t iw = rsp->pipeline.rdex_latch.iw;
+  unsigned op = iw >> 26, rd = (iw >> 11) & 31, funct = iw & 0x3F;
+  bool valid = false, transp = false;
+  unsigned target = rd;
+  int i;
+
+  if (op == 0x12) {
+    valid = true;
+    target = (iw & (1u << 25)) ? (iw >> 6) & 31 : rd;
+  } else if (op == 0x32) {
+    valid = true;
+    target = (iw >> 16) & 31;
+    transp = (rd == 0x0B);
+  }
+  // The window shifts at the decode edge and once per stall cycle, with the
+  // stalled instruction staying in slot 0.
+  for (i = 0; i <= hw->pend_extra; i++) {
+    hw->mw_valid[2] = hw->mw_valid[1]; hw->mw_target[2] = hw->mw_target[1]; hw->mw_transp[2] = hw->mw_transp[1];
+    hw->mw_valid[1] = hw->mw_valid[0]; hw->mw_target[1] = hw->mw_target[0]; hw->mw_transp[1] = hw->mw_transp[0];
+    if (i == 0) {
+      hw->mw_valid[0] = valid; hw->mw_target[0] = (uint8_t) target; hw->mw_transp[0] = transp;
+    }
+  }
+  hw->n_insn++;
+  hw->n_stall += (uint64_t) hw->pend_extra;           // vector dependency stall cycles
+  hw->n_pair += hw->pend_freeze ? 2u : 0u;            // load / mfc0 freeze cycles
+  if ((op >= 1 && op <= 7) || (op == 0 && (funct == 8 || funct == 9)))
+    hw->n_branch++;
+  hw->clock += hw->pend_cost;
+}
+
 // Cost in device cycles of the instruction that the next rsp_cycle_() call
 // executes (the one in the RD/EX latch); records the decision in rsp->hw.pend_*.
 static int rsp_hw_cost(struct rsp *rsp) {
@@ -351,6 +434,8 @@ static int rsp_hw_cost(struct rsp *rsp) {
     hw->pend_cost = 0;
     return 0;
   }
+  if (hw->mister)
+    return rsp_mister_cost(rsp);
   rsp_hw_classify(&rdex->opcode, rdex->iw, &d);
 
   // Earliest cycle at which the operands are ready.
@@ -394,6 +479,10 @@ static void rsp_hw_commit(struct rsp *rsp) {
 
   if (hw->pend_bubble_only) {
     hw->bubble = false;
+    return;
+  }
+  if (hw->mister) {
+    rsp_mister_commit(rsp);
     return;
   }
   rsp_hw_classify(&rdex->opcode, rdex->iw, &d);
@@ -447,6 +536,13 @@ void rsp_cycle_hw(struct rsp *rsp) {
 
 void rsp_hw_print_stats(const struct rsp *rsp) {
   const struct rsp_hwtiming *hw = &rsp->hw;
+  if (hw->mister) {
+    fprintf(stderr, "RSP MiSTer timing: %llu instructions, %llu load-freeze cycles, %llu vector stall cycles, %llu branches, %llu cycles\n",
+            (unsigned long long) hw->n_insn, (unsigned long long) hw->n_pair,
+            (unsigned long long) hw->n_stall, (unsigned long long) hw->n_branch,
+            (unsigned long long) hw->clock);
+    return;
+  }
   fprintf(stderr, "RSP hw timing: %llu instructions, %llu dual-issued (%.1f%%), %llu stall cycles, %llu branches, %llu cycles\n",
           (unsigned long long) hw->n_insn, (unsigned long long) hw->n_pair,
           hw->n_insn ? 100.0 * hw->n_pair / hw->n_insn : 0.0,

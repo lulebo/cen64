@@ -7450,12 +7450,30 @@ static void rdpstat_dump_fb(void)
 
 /* CEN64_DUMP_CMD="<from>:<to>": print every RDP command of frames from..to as
    CMD,<frame>,<hex words...> (triangle commands included, for diffing RSP output). */
+/* CEN64_CMD_HASH=1: CMDH,<frame>,<commands>,<hash> per frame: an FNV-1a hash of every
+   RDP command word of the frame, for proving two microcodes produce identical output.
+   The second word of no-op and sync commands is skipped: microcodes only write the
+   first, so the second is stale buffer memory that the RDP does not read. */
+static int cmdhash_on = -1;
+static uint32_t cmdhash_h = 2166136261u, cmdhash_n = 0, cmdhash_t = 2166136261u, cmdhash_tn = 0;
 static void rdpstat_log_cmd(uint32_t cmd, uint32_t cmd_length)
 {
 	static int inited = 0; static unsigned from = 1, to = 0; const char *e; uint32_t i;
 	if (!inited) {
 		inited = 1; e = getenv("CEN64_DUMP_CMD");
 		if (e) { from = (unsigned)atoi(e); e = strchr(e, ':'); if (e) to = (unsigned)atoi(e + 1); }
+	}
+	if (cmdhash_on < 0) cmdhash_on = getenv("CEN64_CMD_HASH") != NULL;
+	if (cmdhash_on) {
+		uint32_t hash_len = (cmd == 0x00 || (cmd >= 0x26 && cmd <= 0x29)) ? 1 : cmd_length;
+		for (i = 0; i < hash_len; i++) {
+			uint32_t w = rdp_cmd_data[rdp_cmd_cur + i], k;
+			for (k = 0; k < 4; k++) { cmdhash_h ^= (w >> (24 - 8 * k)) & 0xFF; cmdhash_h *= 16777619u; }
+			if (cmd >= 0x08 && cmd <= 0x0F)
+				for (k = 0; k < 4; k++) { cmdhash_t ^= (w >> (24 - 8 * k)) & 0xFF; cmdhash_t *= 16777619u; }
+		}
+		cmdhash_n++;
+		if (cmd >= 0x08 && cmd <= 0x0F) cmdhash_tn++;
 	}
 	if (rdpstat.frame < from || rdpstat.frame > to) return;
 	printf("CMD,%u,%02x", rdpstat.frame, cmd);
@@ -7466,6 +7484,10 @@ static void rdpstat_log_cmd(uint32_t cmd, uint32_t cmd_length)
 static void rdpstat_report(void)
 {
 	rdpstat_dump_fb();
+	if (cmdhash_on > 0) {
+		printf("CMDH,%u,%u,%08x,%u,%08x\n", rdpstat.frame, cmdhash_n, cmdhash_h, cmdhash_tn, cmdhash_t);
+		cmdhash_h = 2166136261u; cmdhash_n = 0; cmdhash_t = 2166136261u; cmdhash_tn = 0;
+	}
 	printf("RDP,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%08x,%u\n",
 	       rdpstat.frame, rdpstat.tris, rdpstat.tris_cycle[0], rdpstat.tris_cycle[1],
 	       rdpstat.tris_cycle[2], rdpstat.tris_cycle[3], rdpstat.rects, rdpstat.fillrects,

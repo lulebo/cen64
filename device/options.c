@@ -33,6 +33,7 @@ const struct cen64_options default_cen64_options = {
   false, // enable_debugger
   false, // enable_profiling
   false, // rsp_hw_timing
+  false, // rsp_mister
   false, // rdp_timing
   0,     // rsp_slow
   NULL,  // rdp_model
@@ -61,6 +62,11 @@ int parse_options(struct cen64_options *options, int argc, const char *argv[]) {
 
     else if (!strcmp(argv[i], "-rsphw"))
       options->rsp_hw_timing = true;
+
+    else if (!strcmp(argv[i], "-rspmister")) {
+      options->rsp_hw_timing = true;
+      options->rsp_mister = true;
+    }
 
     else if (!strcmp(argv[i], "-rdptime"))
       options->rdp_timing = true;

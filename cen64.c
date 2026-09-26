@@ -92,6 +92,7 @@ int cen64_main(int argc, const char **argv) {
   }
 
   g_rsp_hw_timing = options.rsp_hw_timing;
+  g_rsp_mister = options.rsp_mister;
   g_rdp_timing = options.rdp_timing;
   g_rsp_slow = options.rsp_slow;
   g_rdp_model = options.rdp_model;

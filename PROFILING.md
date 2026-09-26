@@ -136,3 +136,23 @@ pixel dumps to frames divisible by N. Pixels are unchanged; the tracer only coun
   identical); with `p`, `OVP` per primitive; with a directory, `ovpix_<frame>.bin` = u32 width,
   u32 height, then per pixel u32 final owner (primitive index + 1), u16 rasterization count and
   u32 base primitive.
+
+## MiSTer core RSP timing (`-rspmister`)
+
+The RSP of the MiSTer N64 core (MiSTer-devel/N64_MiSTer, rtl/RSP_core.vhd) issues one
+instruction per cycle with no branch bubble, but a scalar DMEM load (lb/lbu/lh/lhu/lw/lwu) or
+mfc0 freezes the pipeline until its writeback (+2 cycles, whether or not the result is used),
+and a COP2 instruction whose raw vs field (bits 15..11) or vt field (20..16), or a vector store
+whose vt field, names the target of one of the last three decode cycles' COP2 instructions or
+vector loads stalls 3, 2 or 1 cycles. The core compares raw fields, so the element field of
+vrcp/vmov, the scalar register of mfc2/mtc2 and consecutive mfc2 reads of one register create
+dependencies too; load freezes do not advance that window. `-rspmister` layers this on the
+functional pipeline like `-rsphw` (with `-rspprof` it attributes MiSTer cycles per IMEM word).
+The `RSPHW,` line then reads instructions, load-freeze cycles, vector stall cycles, branches.
+
+## RDP command hash (`CEN64_CMD_HASH=1`)
+
+`CMDH,<frame>,<commands>,<hash>,<triangles>,<triangle hash>` per frame: FNV-1a over every RDP
+command word, and over the triangle commands (0x08-0x0F) alone. The second word of no-op and
+sync commands is skipped (microcodes only write the first; the rest is stale buffer memory the
+RDP does not read). Used to prove that two microcodes produce identical output.

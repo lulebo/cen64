@@ -31,6 +31,7 @@ struct cen64_options {
   bool enable_debugger;
   bool enable_profiling;
   bool rsp_hw_timing;
+  bool rsp_mister;
   bool rdp_timing;
   unsigned rsp_slow;
   const char *rdp_model;

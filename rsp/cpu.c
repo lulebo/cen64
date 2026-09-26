@@ -15,6 +15,7 @@
 unsigned g_rsp_slow = 0;
 unsigned g_rsp_slow_ctr = 0;
 bool g_rsp_hw_timing = false;
+bool g_rsp_mister = false;
 struct rsp_hwtiming *g_rsp_hw_stats = NULL; // for the IS-Viewer profile windows
 bool g_rsp_profile = false;
 struct rsp_prof *g_rsp_prof = NULL;
@@ -49,6 +50,7 @@ int rsp_init(struct rsp *rsp, struct bus_controller *bus) {
   rsp_pipeline_init(&rsp->pipeline);
   memset(&rsp->hw, 0, sizeof(rsp->hw));
   rsp->hw.enabled = g_rsp_hw_timing;
+  rsp->hw.mister = g_rsp_mister;
   g_rsp_hw_stats = &rsp->hw;
   memset(&rsp->prof, 0, sizeof(rsp->prof));
   rsp->prof.enabled = g_rsp_profile;

@@ -70,8 +70,13 @@ struct rsp_hwtiming {
   int64_t pend_issue;
   // statistics
   uint64_t n_insn, n_pair, n_stall, n_branch;
+  // -rspmister: MiSTer N64 core RSP timing (see pipeline.c); slot 0 = last decode cycle
+  bool mister, pend_freeze;
+  int pend_extra;
+  uint8_t mw_valid[3], mw_target[3], mw_transp[3];
 };
 extern bool g_rsp_hw_timing;
+extern bool g_rsp_mister;
 extern bool g_rsp_profile;
 
 // -rspprof: cycles per IMEM word, one bucket per microcode (OSTask.ucode address).
