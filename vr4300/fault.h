@@ -41,6 +41,7 @@ cen64_cold void VR4300_RST(struct vr4300 *vr4300);
 cen64_cold void VR4300_SYSC(struct vr4300 *vr4300);
 cen64_cold void VR4300_WAT(struct vr4300 *vr4300);
 
+cen64_cold void VR4300_FPE(struct vr4300 *vr4300);
 cen64_cold void VR4300_DTLB(struct vr4300 *vr4300, unsigned miss, unsigned inv, unsigned mod);
 cen64_cold void VR4300_ITLB(struct vr4300 *vr4300, unsigned miss);
 

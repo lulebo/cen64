@@ -557,6 +557,18 @@ void VR4300_TRAP(struct vr4300* vr4300) {
   vr4300_debug_exception(&vr4300->debug);
 }
 
+// FPE: Floating-point exception (raised by the CP1 instructions, cp1.c).
+void VR4300_FPE(struct vr4300* vr4300) {
+  struct vr4300_latch *common = &vr4300->pipeline.exdc_latch.common;
+  uint32_t cause, status;
+  uint64_t epc;
+
+  vr4300_ex_fault(vr4300, VR4300_FAULT_FPE);
+  vr4300_exception_prolog(vr4300, common, &cause, &status, &epc);
+  vr4300_exception_epilogue(vr4300, (cause & ~0xFF) | (15 << 2),
+    status, epc, 0x180);
+}
+
 // RI: Reserved Instruction exception
 void VR4300_RI(struct vr4300* vr4300) {
   struct vr4300_latch *common = &vr4300->pipeline.exdc_latch.common;

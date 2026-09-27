@@ -648,13 +648,14 @@ static void ov_begin_prim(uint32_t kind)
 #define OV_P (ov_prim[ov_cur])
 #define OV_ACTIVE (ov_on && ov_cur != 0xffffffffu)
 
-/* CEN64_NOISE_POS=1: position-seeded RDP noise (see the pixel gates in PROFILING.md) */
+/* CEN64_NOISE_POS=1: position- and frame-seeded RDP noise (see the pixel gates in PROFILING.md); =2 position only */
 static inline void ov_noise_seed(int x, int y)
 {
 	static int mode = -1;
-	if (mode < 0) { const char *e = getenv("CEN64_NOISE_POS"); mode = e && *e == '1'; }
+	if (mode < 0) { const char *e = getenv("CEN64_NOISE_POS"); mode = e ? atoi(e) : 0; }
 	if (mode) {
-		uint32_t h = (uint32_t)x * 0x9E3779B1u ^ (uint32_t)y * 0x85EBCA77u ^ rdpstat.frame * 0xC2B2AE3Du;
+		/* 1: position and RDP frame; 2: position only (images independent of frame pacing) */
+		uint32_t h = (uint32_t)x * 0x9E3779B1u ^ (uint32_t)y * 0x85EBCA77u ^ (mode == 2 ? 0u : rdpstat.frame * 0xC2B2AE3Du);
 		h ^= h >> 15; h *= 0x2C1B3C6Du; h ^= h >> 12;
 		iseed = (int32_t)h;
 	}
