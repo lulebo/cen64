@@ -2,6 +2,7 @@
 #include <string.h>
 
 #include "common.h"
+#include "rdp/cpu.h"
 #include "is_viewer.h"
 #include <stdio.h>
 
@@ -182,8 +183,11 @@ int write_is_viewer(struct is_viewer *is, uint32_t address, uint32_t word, uint3
         iconv(is->cd, &inptr, &len, &outptr, &outlen);
 
         profile_window((const char *) is->output_buffer_conv);
-        if (is->show_output)
+        if (is->show_output) {
+          if (g_isv_ts)
+            printf("@%llu,", (unsigned long long) *g_rcp_now);
           printf("%s", is->output_buffer_conv);
+        }
         else if (!is->output_warning) {
           printf("ISViewer debugging output detected and suppressed.\nRun cen64 with option -is-viewer to display it\n");
           is->output_warning = 1;

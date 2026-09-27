@@ -122,6 +122,11 @@ struct cen64_device *device_create(struct cen64_device *device,
     return NULL;
   }
 
+  // -rdptime idle attribution (RDPI lines) reads the RSP's halt bit.
+  g_rdp_rsp_status = &device->rsp.regs[RSP_CP0_REGISTER_SP_STATUS];
+  g_rcp_now = &device->rdp.timing.now;
+  g_isv_ts = getenv("CEN64_ISV_TS") != NULL;
+
   // Initialize the VR4300.
   if (vr4300_init(device->vr4300, &device->bus, profiling)) {
     debug("create_device: Failed to initialize the VR4300.\n");

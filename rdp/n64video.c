@@ -7544,6 +7544,9 @@ static void rdpstat_report(void)
 		       (unsigned long long) t->fspans, (unsigned long long) t->fspansfb, (unsigned long long) t->fspansz);
 		t->stat_busy_frame = t->fpx1 = t->fpx2 = t->fpxfill = t->fpxcopy = t->fpxz = t->ftri = t->fcmd = t->ftmem = 0;
 		t->fspans = t->fspansfb = t->fspansz = 0;
+		printf("RDPI,%u,%llu,%llu,%llu,%llu\n", rdpstat.frame, (unsigned long long) t->fbusycyc,
+		       (unsigned long long) t->fidle[0], (unsigned long long) t->fidle[1], (unsigned long long) t->fidle[2]);
+		t->fbusycyc = t->fidle[0] = t->fidle[1] = t->fidle[2] = 0;
 	}
 	rspstat_imem_dma = 0;
 	g_bus.rdp_fbr += rdpstat.fbread; g_bus.rdp_fbw += rdpstat.fbwrite; g_bus.rdp_fill += rdpstat.fbfill;

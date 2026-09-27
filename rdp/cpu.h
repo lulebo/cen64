@@ -47,8 +47,17 @@ struct rdp_timing {
   uint64_t stat_busy, stat_busy_frame;
   uint64_t fpx1, fpx2, fpxfill, fpxcopy, fpxz, ftri, fcmd, ftmem; // per-frame work behind the cost
   uint64_t fspans, fspansfb, fspansz;
+  uint64_t fbusycyc;         // cycles with work queued (per frame)
+  uint64_t fidle[3];         // idle cycles while the RSP runs gfx / audio / is halted (per frame)
+  uint64_t idle_start, idle_cls[3]; // the idle interval in progress (CEN64_ISV_TS: RIDLE lines)
+  int was_idle;
 };
 extern int g_rdp_timing;
+extern uint32_t *g_rdp_rsp_status; // the RSP's SP_STATUS (set by the device): idle attribution
+extern int g_rsp_task_is_audio;
+extern int g_isv_ts;               // CEN64_ISV_TS: timestamps and RIDLE lines
+extern uint64_t *g_rcp_now;        // the modelled RCP clock (rdp timing), for the IS-Viewer prefix
+void rdp_idle_interval_end(struct rdp_timing *t);
 extern const char *g_rdp_model;
 
 struct rdp {
@@ -65,7 +74,22 @@ static inline void rdp_timing_tick(struct rdp *rdp) {
   if (!t->on) return;
   t->now++;
   if (g_rdram.on) rdram_tick();
-  if (t->head != t->tail && t->now >= t->ring[t->head].finish) rdp_timing_advance(rdp);
+  if (t->head != t->tail) {
+    t->fbusycyc++;
+    if (unlikely(t->was_idle)) rdp_idle_interval_end(t);
+    if (t->now >= t->ring[t->head].finish) rdp_timing_advance(rdp);
+  } else {
+    unsigned cls = (*g_rdp_rsp_status & 1) ? 2 : g_rsp_task_is_audio ? 1 : 0; // SP_STATUS_HALT
+    t->fidle[cls]++;
+    if (g_isv_ts) {
+      if (!t->was_idle) {
+        t->was_idle = 1;
+        t->idle_start = t->now;
+        t->idle_cls[0] = t->idle_cls[1] = t->idle_cls[2] = 0;
+      }
+      t->idle_cls[cls]++;
+    }
+  }
 }
 
 cen64_cold int rdp_init(struct rdp *rdp, struct bus_controller *bus);

@@ -35,6 +35,21 @@ static int rdp_dbg(void) {
   return dbg;
 }
 
+static uint32_t rdp_rsp_status_none = 1;
+uint32_t *g_rdp_rsp_status = &rdp_rsp_status_none;
+static uint64_t rcp_now_none = 0;
+uint64_t *g_rcp_now = &rcp_now_none;
+int g_isv_ts = 0;
+
+void rdp_idle_interval_end(struct rdp_timing *t) {
+  uint64_t len = t->now - t->idle_start;
+  t->was_idle = 0;
+  if (len > 6250) // 0.1 ms
+    printf("RIDLE,%llu,%llu,%llu,%llu,%llu\n", (unsigned long long) t->idle_start, (unsigned long long) len,
+           (unsigned long long) t->idle_cls[0], (unsigned long long) t->idle_cls[1],
+           (unsigned long long) t->idle_cls[2]);
+}
+
 // Reads a word from the DP MMIO register space.
 int read_dp_regs(void *opaque, uint32_t address, uint32_t *word) {
   struct rdp *rdp = (struct rdp *) opaque;
