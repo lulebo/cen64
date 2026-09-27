@@ -617,8 +617,15 @@ cen64_cold static int vr4300_cacheop_dc_create_dirty_ex(
   unsigned i;
 
   int delay = 0;
+  static int cde_old = -1;
 
-  if ((line = vr4300_dcache_should_flush_line(&vr4300->dcache, vaddr))) {
+  if (cde_old < 0) cde_old = getenv("CEN64_CDE_OLD") != NULL;
+
+  // VR4300 manual: "If the cache line does not contain the specified address, and the cache line
+  // is dirty, the data is written back". A dirty line that already holds the address is kept as
+  // it is (cen64 used to write it back too; CEN64_CDE_OLD=1 restores that).
+  if ((line = vr4300_dcache_should_flush_line(&vr4300->dcache, vaddr)) &&
+      (cde_old || vr4300_dcache_get_tag(line, vaddr) != (paddr & ~0xFU))) {
     bus_address = vr4300_dcache_get_tag(line, vaddr);
     memcpy(data, line->data, sizeof(data));
 
