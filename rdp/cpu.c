@@ -41,7 +41,12 @@ void rdp_timing_advance(struct rdp *rdp) {
     struct rdp_timing_entry *e = &t->ring[t->head];
     rdp->regs[DPC_CURRENT_REG] = e->next;
     if (e->kind == 1) t->start_valid--;
-    else if (e->kind == 2) signal_rcp_interrupt(rdp->bus->vr4300, MI_INTR_DP);
+    else if (e->kind == 2) {
+      static long trace = -1;
+      if (trace < 0) trace = getenv("CEN64_DPC_TRACE") ? atol(getenv("CEN64_DPC_TRACE")) : 0;
+      if (trace > 0) { trace--; printf("DPI,%llu\n", (unsigned long long) t->now); }
+      signal_rcp_interrupt(rdp->bus->vr4300, MI_INTR_DP);
+    }
     t->head = (t->head + 1) & (RDP_TIMING_RING - 1);
   }
 }

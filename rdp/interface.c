@@ -121,6 +121,20 @@ int write_dp_regs(void *opaque, uint32_t address, uint32_t word, uint32_t dqm) {
   enum dp_register reg = (offset >> 2);
 
   debug_mmio_write(dp, dp_register_mnemonics[reg], word, dqm);
+  {
+    static long trace = -1;
+    if (trace < 0) trace = getenv("CEN64_DPC_TRACE") ? atol(getenv("CEN64_DPC_TRACE")) : 0;
+    if (trace > 0 && rdp->timing.on && (reg == DPC_START_REG || reg == DPC_END_REG || reg == DPC_STATUS_REG)) {
+      struct rdp_timing *t = &rdp->timing;
+      uint32_t cur;
+      trace--;
+      read_dp_regs(opaque, DP_REGS_BASE_ADDRESS + 4 * DPC_CURRENT_REG, &cur);
+      printf("DPW,%llu,%s,%06x,cur=%06x,exec=%06x,busy=%d,sv=%u,ev=%u,end=%06x\n", (unsigned long long) t->now,
+             reg == DPC_START_REG ? "START" : reg == DPC_END_REG ? "END" : "STATUS", word, cur,
+             t->head != t->tail ? t->ring[t->head].cur : rdp->regs[DPC_CURRENT_REG], t->head != t->tail,
+             t->start_pending, t->start_valid, rdp->regs[DPC_END_REG]);
+    }
+  }
   if (rdp->timing.on && rdp_dbg()) {
     static int n = 0;
     if (n < 600) { n++; fprintf(stderr, "WR %u <- %08x\n", (unsigned) reg, word); }
