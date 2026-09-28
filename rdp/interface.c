@@ -154,6 +154,26 @@ int write_dp_regs(void *opaque, uint32_t address, uint32_t word, uint32_t dqm) {
       break;
 
     case DPC_END_REG:
+      {
+        static int wedge_on = -1;
+        static unsigned wedge_hits = 0;
+        if (wedge_on < 0) wedge_on = getenv("CEN64_RDP_WEDGE") != NULL;
+        if (wedge_on && rdp->timing.on && word != rdp->regs[DPC_END_REG]) {
+          struct rdp_timing *t = &rdp->timing;
+          unsigned i;
+          for (i = t->head; i != t->tail; i = (i + 1) & (RDP_TIMING_RING - 1)) {
+            if (t->ring[i].kind == 2) {
+              wedge_hits++;
+              if (wedge_hits <= 20)
+                printf("WEDGEHIT,%llu,%06x,%06x,%u\n", (unsigned long long) t->now, word,
+                       rdp->regs[DPC_END_REG], (t->tail - t->head) & (RDP_TIMING_RING - 1));
+              else if ((wedge_hits & 1023) == 0)
+                printf("WEDGEHITS,%u\n", wedge_hits);
+              break;
+            }
+          }
+        }
+      }
       rdp->regs[DPC_END_REG] = word;
       if (rdp->timing.on && rdp->timing.start_pending) {
         struct rdp_timing *t = &rdp->timing;
