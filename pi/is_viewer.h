@@ -6,6 +6,7 @@
 // IS Viewer
 #define IS_VIEWER_BASE_ADDRESS    0x13FF0000
 #define IS_VIEWER_ADDRESS_LEN     0x00001000
+#define IS_VIEWER_RING_LEN        0x00010000 // CEN64_ISV_RING=1: the SummerCart64's 64 KB ring
 
 struct is_viewer {
   uint32_t base_address;
@@ -17,6 +18,9 @@ struct is_viewer {
   uint8_t *output_buffer_conv;
   int show_output;
   int output_warning;
+  int ring;                 // CEN64_ISV_RING=1: ring protocol (read pointer +4, write pointer +0x14)
+  uint8_t *line;            // ring mode: the line being assembled
+  size_t line_pos;
 
   iconv_t cd;
 };

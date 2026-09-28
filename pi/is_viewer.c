@@ -133,8 +133,13 @@ int is_viewer_init(struct is_viewer *is, int is_viewer_output) {
   // TODO support other addresses
   is->base_address = IS_VIEWER_BASE_ADDRESS;
   is->len = IS_VIEWER_ADDRESS_LEN;
+  if (getenv("CEN64_ISV_RING") != NULL && atoi(getenv("CEN64_ISV_RING")) != 0) {
+    is->ring = atoi(getenv("CEN64_ISV_RING"));
+    is->len = IS_VIEWER_RING_LEN;
+    is->line = calloc(IS_VIEWER_RING_LEN, 1);
+  }
 
-  is->buffer = calloc(IS_VIEWER_ADDRESS_LEN, 1);
+  is->buffer = calloc(is->len, 1);
   is->output_buffer = calloc(IS_BUFFER_SIZE, 1);
   is->output_buffer_conv = calloc(IS_BUFFER_SIZE * 3, 1);
   is->show_output = is_viewer_output;
@@ -158,13 +163,60 @@ int read_is_viewer(struct is_viewer *is, uint32_t address, uint32_t *word) {
 
   memcpy(word, is->buffer + offset, sizeof(*word));
   *word = byteswap_32(*word);
+  if (is->ring > 1 && offset < 0x20)
+    fprintf(stderr, "ISVR rd +%x -> %x\n", offset, *word);
 
   return 0;
+}
+
+// Ring mode: one complete line of output (no EUC conversion: the ROM prints ASCII).
+static void is_viewer_ring_line(struct is_viewer *is) {
+  is->line[is->line_pos] = 0;
+  profile_window((const char *) is->line);
+  if (is->show_output) {
+    if (g_isv_ts)
+      printf("@%llu,", (unsigned long long) *g_rcp_now);
+    printf("%s", (const char *) is->line);
+  }
+  is->line_pos = 0;
+}
+
+static uint32_t is_viewer_word(struct is_viewer *is, uint32_t offset) {
+  uint32_t w;
+  memcpy(&w, is->buffer + offset, 4);
+  return byteswap_32(w);
 }
 
 int write_is_viewer(struct is_viewer *is, uint32_t address, uint32_t word, uint32_t dqm) {
   uint32_t offset = address - is->base_address;
   assert(offset + 4 <= is->len);
+
+  if (is->ring) {
+    // The host side of the SummerCart64's emulation: when the write pointer moves and the token
+    // is present, everything from the read pointer to it is printed and the read pointer follows.
+    uint32_t w = byteswap_32(word);
+    memcpy(is->buffer + offset, &w, sizeof(w));
+    if (is->ring > 1 && offset < 0x20)
+      fprintf(stderr, "ISVR wr +%x = %x (token %x rp %x)\n", offset, word, is_viewer_word(is, 0), is_viewer_word(is, 4));
+    if (offset == 0x14 && is_viewer_word(is, 0) == 0x49533634) {
+      const uint32_t size = IS_VIEWER_RING_LEN - 0x20;
+      uint32_t rp = is_viewer_word(is, 4), wp = word;
+      if (rp < size && wp < size) {
+        while (rp != wp) {
+          uint8_t c = is->buffer[0x20 + rp];
+          if (is->ring > 2) fputc(c, stderr);
+          rp = rp + 1 == size ? 0 : rp + 1;
+          if (is->line_pos < IS_VIEWER_RING_LEN - 2)
+            is->line[is->line_pos++] = c;
+          if (c == '\n')
+            is_viewer_ring_line(is);
+        }
+        w = byteswap_32(rp);
+        memcpy(is->buffer + 4, &w, sizeof(w));
+      }
+    }
+    return 0;
+  }
 
   if (offset == 0x14) {
     if (word > 0) {

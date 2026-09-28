@@ -62,6 +62,14 @@ int read_dp_regs(void *opaque, uint32_t address, uint32_t *word) {
     static int n = 0;
     if (reg == DPC_CURRENT_REG && t->head != t->tail)
       *word = t->ring[t->head].cur;
+    else if (reg == DPC_CLOCK_REG)
+      *word = (uint32_t) (t->now - t->dpc_clock0) & 0xFFFFFF;
+    else if (reg == DPC_PIPEBUSY_REG)
+      *word = (uint32_t) (t->dpc_busy - t->dpc_pipe0) & 0xFFFFFF;
+    else if (reg == DPC_BUFBUSY_REG)
+      *word = (uint32_t) (t->dpc_busy - t->dpc_cmd0) & 0xFFFFFF;
+    else if (reg == DPC_TMEM_REG)
+      *word = 0;
     else if (reg == DPC_STATUS_REG)
       *word |= (t->start_pending ? 0x400 : 0) | (t->start_valid ? 0x200 : 0) | (t->head != t->tail ? 0x160 : 0); // START_VALID; END_VALID; DMA/CMD/PIPE busy
     {
@@ -151,6 +159,11 @@ int write_dp_regs(void *opaque, uint32_t address, uint32_t word, uint32_t dqm) {
         rdp->regs[DPC_STATUS_REG] &= ~DP_FLUSH;
       else if (word & DP_SET_FLUSH)
         rdp->regs[DPC_STATUS_REG] |= DP_FLUSH;
+
+      // counters (bit 6 tmem, 7 pipe, 8 cmd, 9 clock): kept by the timing model
+      if (word & 0x200) rdp->timing.dpc_clock0 = rdp->timing.now;
+      if (word & 0x080) rdp->timing.dpc_pipe0 = rdp->timing.dpc_busy;
+      if (word & 0x100) rdp->timing.dpc_cmd0 = rdp->timing.dpc_busy;
       break;
 
     default:

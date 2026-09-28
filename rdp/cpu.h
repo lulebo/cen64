@@ -51,6 +51,8 @@ struct rdp_timing {
   uint64_t fidle[3];         // idle cycles while the RSP runs gfx / audio / is halted (per frame)
   uint64_t idle_start, idle_cls[3]; // the idle interval in progress (CEN64_ISV_TS: RIDLE lines)
   int was_idle;
+  uint64_t dpc_busy;         // cycles with work queued, ever (DPC_PIPEBUSY / DPC_BUFBUSY)
+  uint64_t dpc_clock0, dpc_pipe0, dpc_cmd0; // values at the last counter clear
 };
 extern int g_rdp_timing;
 extern uint32_t *g_rdp_rsp_status; // the RSP's SP_STATUS (set by the device): idle attribution
@@ -76,6 +78,7 @@ static inline void rdp_timing_tick(struct rdp *rdp) {
   if (g_rdram.on) rdram_tick();
   if (t->head != t->tail) {
     t->fbusycyc++;
+    t->dpc_busy++;
     if (unlikely(t->was_idle)) rdp_idle_interval_end(t);
     if (t->now >= t->ring[t->head].finish) rdp_timing_advance(rdp);
   } else {
