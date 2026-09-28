@@ -50,6 +50,25 @@ void rdp_idle_interval_end(struct rdp_timing *t) {
            (unsigned long long) t->idle_cls[2]);
 }
 
+// CEN64_DPC_PREFETCH: the fetch pointer - the end of the entries within n bytes of the executing
+// one, not past a queued transfer (kind 1) - as DPC_CURRENT.
+static int dpc_prefetch = -1;
+static uint32_t dpc_fetch_pointer(struct rdp_timing *t) {
+  unsigned i = t->head;
+  uint32_t base = t->ring[t->head].cur, p = t->ring[t->head].cur;
+  while (i != t->tail) {
+    const struct rdp_timing_entry *e = &t->ring[i];
+    if (e->kind == 1 && i != t->head)
+      break;
+    if (e->kind != 1)
+      p = e->next;
+    if (e->next - base >= (uint32_t) dpc_prefetch)
+      break;
+    i = (i + 1) & (RDP_TIMING_RING - 1);
+  }
+  return p;
+}
+
 // Reads a word from the DP MMIO register space.
 int read_dp_regs(void *opaque, uint32_t address, uint32_t *word) {
   struct rdp *rdp = (struct rdp *) opaque;
@@ -60,8 +79,10 @@ int read_dp_regs(void *opaque, uint32_t address, uint32_t *word) {
   if (rdp->timing.on) {
     struct rdp_timing *t = &rdp->timing;
     static int n = 0;
+    if (dpc_prefetch < 0)
+      dpc_prefetch = getenv("CEN64_DPC_PREFETCH") ? atoi(getenv("CEN64_DPC_PREFETCH")) : 0;
     if (reg == DPC_CURRENT_REG && t->head != t->tail)
-      *word = t->ring[t->head].cur;
+      *word = dpc_prefetch > 0 && t->ring[t->head].kind != 1 ? dpc_fetch_pointer(t) : t->ring[t->head].cur;
     else if (reg == DPC_CLOCK_REG)
       *word = (uint32_t) (t->now - t->dpc_clock0) & 0xFFFFFF;
     else if (reg == DPC_PIPEBUSY_REG)
@@ -128,6 +149,12 @@ int write_dp_regs(void *opaque, uint32_t address, uint32_t word, uint32_t dqm) {
         if (t->head != t->tail) {
           // still busy: the new transfer is queued behind the running one (END_VALID)
           struct rdp_timing_entry *e = &t->ring[t->tail];
+          if (start == word) {
+            static unsigned dpzero = 0;
+            if (dpzero++ < 50)
+              printf("DPZERO,%llu,%06x,%06x\n", (unsigned long long) t->now, start,
+                     t->ring[t->head].cur);
+          }
           e->cur = e->next = start;
           e->finish = t->busy_until;
           e->kind = 1;

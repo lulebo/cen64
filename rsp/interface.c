@@ -16,6 +16,28 @@
 #include "rsp/interface.h"
 #include "common/bus_traffic.h"
 #include "bus/rdram_model.h"
+#include "vr4300/dcache.h"
+#include <stdlib.h>
+
+// CEN64_STALE=1: RSP DMA reads of lines the CPU holds dirty in its D-cache (stale RDRAM data).
+struct vr4300_dcache *g_stale_dcache = NULL;
+unsigned long long g_stale_lines[2];
+static void stale_check(uint32_t source, uint32_t length) {
+  static int on = -1, printed = 0;
+  uint32_t a;
+  if (on < 0) on = getenv("CEN64_STALE") != NULL;
+  if (!on || g_stale_dcache == NULL) return;
+  for (a = source & ~0xFU; a < source + length; a += 16) {
+    const struct vr4300_dcache_line *line = &g_stale_dcache->lines[(a >> 4) & 0x1FF];
+    if ((line->metadata & 3) == 3 && (line->metadata & ~0xFFFU) == (a & ~0xFFFU)) {
+      g_stale_lines[g_rsp_task_is_audio ? 1 : 0]++;
+      if (printed < 200) {
+        printed++;
+        printf("STALE,%s,%06x,%06x,%u\n", g_rsp_task_is_audio ? "aud" : "gfx", a, source, length);
+      }
+    }
+  }
+}
 
 // DMA into the RSP's memory space.
 extern int rsp_audtask_active;
@@ -45,6 +67,7 @@ void rsp_dma_read(struct rsp *rsp) {
 
   do {
     uint32_t source = rsp->regs[RSP_CP0_REGISTER_DMA_DRAM] & 0x7FFFFC;
+    stale_check(source, length);
     uint32_t dest = rsp->regs[RSP_CP0_REGISTER_DMA_CACHE] & 0x1FFC;
     j = 0;
 

@@ -20,6 +20,7 @@ struct is_viewer {
   int output_warning;
   int ring;                 // CEN64_ISV_RING=1: ring protocol (read pointer +4, write pointer +0x14)
   uint8_t *line;            // ring mode: the line being assembled
+  uint64_t enable_at;       // CEN64_ISV_ENABLE_S: RCP cycle at which the emulation comes on
   size_t line_pos;
 
   iconv_t cd;

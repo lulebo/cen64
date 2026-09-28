@@ -56,6 +56,11 @@ static void profile_window(const char *line) {
     itrace_start();
     dtrace_start();
   } else if (!strncmp(line, "BENCH_END,", 10)) {
+    {
+      extern unsigned long long g_stale_lines[2];
+      if (getenv("CEN64_STALE") != NULL)
+        printf("STALESUM,gfx=%llu,aud=%llu\n", g_stale_lines[0], g_stale_lines[1]);
+    }
     itrace_stop();
     dtrace_stop();
     char name[64]; size_t k = 0;
@@ -137,9 +142,19 @@ int is_viewer_init(struct is_viewer *is, int is_viewer_output) {
     is->ring = atoi(getenv("CEN64_ISV_RING"));
     is->len = IS_VIEWER_RING_LEN;
     is->line = calloc(IS_VIEWER_RING_LEN, 1);
+    if (getenv("CEN64_ISV_ENABLE_S") != NULL)
+      is->enable_at = (uint64_t) (atof(getenv("CEN64_ISV_ENABLE_S")) * 62500000.0);
   }
 
   is->buffer = calloc(is->len, 1);
+  if (is->ring && is->buffer != NULL && getenv("CEN64_ISV_STALE") != NULL) {
+    static const uint8_t hdr[] = {'I', 'S', '6', '4', 0, 0, 0x3a, 0, 0x5a, 0x5a, 0x5a, 0x5a, 0, 0, 0, 0,
+                                  0, 0, 0, 0, 0, 0, 0x3a, 0};
+    uint32_t i;
+    memcpy(is->buffer, hdr, sizeof(hdr));
+    for (i = 0x20; i < 0x20 + 0x3a00; i++)
+      is->buffer[i] = (uint8_t) "stale line\n"[i % 11];
+  }
   is->output_buffer = calloc(IS_BUFFER_SIZE, 1);
   is->output_buffer_conv = calloc(IS_BUFFER_SIZE * 3, 1);
   is->show_output = is_viewer_output;
@@ -195,6 +210,11 @@ int write_is_viewer(struct is_viewer *is, uint32_t address, uint32_t word, uint3
     // The host side of the SummerCart64's emulation: when the write pointer moves and the token
     // is present, everything from the read pointer to it is printed and the read pointer follows.
     uint32_t w = byteswap_32(word);
+    if (is->enable_at != 0 && *g_rcp_now < is->enable_at) {
+      if (is->ring > 1 && offset < 0x20)
+        fprintf(stderr, "ISVR drop +%x = %x\n", offset, word);
+      return 0; // emulation off: the window is read-only
+    }
     memcpy(is->buffer + offset, &w, sizeof(w));
     if (is->ring > 1 && offset < 0x20)
       fprintf(stderr, "ISVR wr +%x = %x (token %x rp %x)\n", offset, word, is_viewer_word(is, 0), is_viewer_word(is, 4));

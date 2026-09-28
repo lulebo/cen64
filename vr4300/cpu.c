@@ -217,6 +217,10 @@ static void vr4300_connect_bus(struct vr4300 *vr4300,
 
 // Initializes the VR4300 component.
 int vr4300_init(struct vr4300 *vr4300, struct bus_controller *bus, bool profiling) {
+  {
+    extern struct vr4300_dcache *g_stale_dcache; // rsp/interface.c: CEN64_STALE checks
+    g_stale_dcache = &vr4300->dcache;
+  }
   vr4300_connect_bus(vr4300, bus);
 
   vr4300_cp0_init(vr4300);
