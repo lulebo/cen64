@@ -7521,8 +7521,42 @@ static void texstat_attr_print(unsigned frame)
 		printf("TEXA,%u,%u,%u,%08x,%08x,%u,%u,%u,%u\n", frame, (tmp[i].info >> 12) & 7, (tmp[i].info >> 11) & 1,
 		       tmp[i].dl, tmp[i].bhv, tmp[i].loads, tmp[i].bytes, tmp[i].rep, tmp[i].held);
 }
+struct ts_img { uint32_t addr, per, loads, bytes, rep, held, hash, rfmt, rline; };
+static struct ts_img ts_img[2048];
+static unsigned ts_nimg;
+static int ts_last_img = -1;
+static uint32_t ts_fnv(uint32_t addr, uint32_t bytes)
+{
+	uint32_t h = 2166136261u, i;
+	for (i = 0; i + 1 < bytes; i += 2) {
+		uint32_t idx = ((addr >> 1) + (i >> 1)) & (RDRAM_MASK >> 1);
+		uint32_t v = idx <= idxlim16 ? byteswap_16(rdram_16[idx]) : 0;
+		h = (h ^ (v >> 8)) * 16777619u;
+		h = (h ^ (v & 0xFF)) * 16777619u;
+	}
+	return h;
+}
+static int ts_img_cmp(const void *a, const void *b)
+{
+	const struct ts_img *x = a, *y = b;
+	return x->bytes < y->bytes ? 1 : x->bytes > y->bytes ? -1 : 0;
+}
+static void texstat_img_print(unsigned frame)
+{
+	static struct ts_img tmp[2048]; unsigned i;
+	memcpy(tmp, ts_img, sizeof tmp);
+	qsort(tmp, ts_nimg, sizeof tmp[0], ts_img_cmp);
+	for (i = 0; i < ts_nimg && i < 60; i++)
+		printf("TEXI,%u,%08x,%u,%u,%u,%u,%u,%08x,%u,%u\n", frame, tmp[i].addr, tmp[i].per, tmp[i].loads, tmp[i].bytes,
+		       tmp[i].rep, tmp[i].held, tmp[i].hash, tmp[i].rfmt, tmp[i].rline);
+}
 static void texstat_cmd(uint32_t cmd, const uint32_t *w)
 {
+	if (texstat_on == 3 && cmd == 0x35 && ((w[1] >> 24) & 7) != 7 && ts_last_img >= 0) {
+		/* the render tile set after a load: the texture's real format and line */
+		ts_img[ts_last_img].rfmt = (w[0] >> 19) & 0x1F;
+		ts_img[ts_last_img].rline = (w[0] >> 9) & 0x1FF;
+	}
 	if (cmd == 0x2C && ((w[0] >> 18) & 0xF) == 0xA && texstat_on == 2) {
 		unsigned kind = (w[0] >> 15) & 7, slot = (w[0] >> 3) & 0xFF;
 		if (kind == 5) ts_bhv = w[1];
@@ -7547,6 +7581,20 @@ static void texstat_cmd(uint32_t cmd, const uint32_t *w)
 			c->loads++; c->bytes += bytes; if (found) c->rep += bytes;
 			if (!memcmp(key, ts_prev, sizeof key)) c->held += bytes;
 		}
+		if (texstat_on == 3) {
+			unsigned j;
+			for (j = 0; j < ts_nimg; j++) if (ts_img[j].addr == ts_img_w1 && ts_img[j].per == bytes) break;
+			if (j == ts_nimg && ts_nimg < 2048) {
+				ts_img[j].addr = ts_img_w1; ts_img[j].per = bytes; ts_img[j].hash = ts_fnv(ts_img_w1, bytes);
+				ts_nimg++;
+			}
+			if (j < 2048) {
+				ts_img[j].loads++; ts_img[j].bytes += bytes;
+				if (found) ts_img[j].rep += bytes;
+				if (!memcmp(key, ts_prev, sizeof key)) ts_img[j].held += bytes;
+				ts_last_img = (int) j;
+			}
+		}
 		if (!memcmp(key, ts_prev, sizeof key)) ts_held += bytes;
 		memcpy(ts_prev, key, sizeof key);
 	}
@@ -7555,6 +7603,7 @@ static void texstat_frame_end(unsigned frame)
 {
 	if (texstat_on <= 0) return;
 	if (texstat_on == 2 && frame % 300 == 0) texstat_attr_print(frame);
+	if (texstat_on == 3 && frame % 300 == 0) texstat_img_print(frame);
 	printf("TEX,%u,%u,%u,%u,%u,%u\n", frame, ts_loads, ts_bytes, ts_rep, ts_held, ts_nseen);
 	ts_loads = ts_bytes = ts_rep = ts_held = 0; ts_nseen = 0;
 }
