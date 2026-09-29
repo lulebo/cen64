@@ -545,6 +545,8 @@ struct rdpstat_t {
     unsigned spans;
 };
 static struct rdpstat_t rdpstat;
+// RDPS: triangles by pixels touched (0, 1-4, 5-16, more) and their spans, per frame
+static unsigned tsz_n[4], tsz_sp[4];
 unsigned rdpstat_frame_now(void);
 #include "common/bus_traffic.h"
 #include "bus/rdram_model.h"
@@ -7538,6 +7540,12 @@ static void rdpstat_report(void)
 		last_busy = g_rdram.rdp_busy_total;
 	}
 	if (cen64->rdp.timing.on) {
+		printf("RDPS,%u,%u,%u,%u,%u,%u,%u,%u,%u\n", rdpstat.frame, tsz_n[0], tsz_sp[0], tsz_n[1], tsz_sp[1],
+		       tsz_n[2], tsz_sp[2], tsz_n[3], tsz_sp[3]);
+		memset(tsz_n, 0, sizeof(tsz_n));
+		memset(tsz_sp, 0, sizeof(tsz_sp));
+	}
+	if (cen64->rdp.timing.on) {
 		struct rdp_timing *t = &cen64->rdp.timing;
 		printf("RDPT,%u,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu\n", rdpstat.frame, (unsigned long long) t->stat_busy_frame,
 		       (unsigned long long) t->fpx1, (unsigned long long) t->fpx2, (unsigned long long) t->fpxfill, (unsigned long long) t->fpxcopy,
@@ -8082,6 +8090,11 @@ static void rdp_timing_account(uint32_t cmd, uint32_t addr, uint32_t len, const 
 	unsigned px_z = cmd == 0x29 ? 0 : rdpstat.zread - b->zread;
 	unsigned px = px_w > px_z ? px_w : px_z;
 	double cost = t->ccmd;
+	if (cmd >= 8 && cmd <= 15) {
+		unsigned k = px == 0 ? 0 : px <= 4 ? 1 : px <= 16 ? 2 : 3;
+		tsz_n[k]++;
+		tsz_sp[k] += rdpstat.spans - b->spans;
+	}
 	uint64_t start;
 	if (g_rdram.on) {
 		// -rdram: the cost is the replayed work; the entry finishes when the model reaches its mark
