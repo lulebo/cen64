@@ -7488,9 +7488,82 @@ static void rdpstat_dump_fb(void)
 static int cmdhash_on = -1;
 static uint32_t cmdhash_h = 2166136261u, cmdhash_n = 0, cmdhash_t = 2166136261u, cmdhash_tn = 0;
 static uint32_t cmdhash_nz = 2166136261u, cmdhash_tnz = 2166136261u;
+/* CEN64_TEXSTAT=1: TEX,<frame>,<loads>,<bytes>,<repeatBytes>,<heldBytes>,<distinct> per frame (see
+   texstat_frame_end): texture loads and how many of their bytes a frame had loaded before. */
+static int texstat_on = -1;
+static uint32_t ts_img_w0, ts_img_w1, ts_tile7_w0, ts_tile7_w1;
+static uint32_t ts_prev[6];
+static uint32_t ts_seen[512];
+static unsigned ts_nseen, ts_loads, ts_bytes, ts_rep, ts_held;
+struct ts_src { uint32_t dl, bhv, info; unsigned loads, bytes, rep, held; };
+static struct ts_src ts_src[1024];
+static unsigned ts_nsrc, ts_cur = 1023;
+static uint32_t ts_bhv;
+static unsigned ts_src_find(uint32_t dl, uint32_t bhv, uint32_t info)
+{
+	unsigned i;
+	for (i = 0; i < ts_nsrc; i++) if (ts_src[i].dl == dl && ts_src[i].bhv == bhv && ts_src[i].info == info) return i;
+	if (ts_nsrc >= 1023) return 1023;
+	ts_src[ts_nsrc].dl = dl; ts_src[ts_nsrc].bhv = bhv; ts_src[ts_nsrc].info = info;
+	return ts_nsrc++;
+}
+static int ts_cmp(const void *a, const void *b)
+{
+	const struct ts_src *x = a, *y = b;
+	return x->rep < y->rep ? 1 : x->rep > y->rep ? -1 : 0;
+}
+static void texstat_attr_print(unsigned frame)
+{
+	static struct ts_src tmp[1024]; unsigned i;
+	memcpy(tmp, ts_src, sizeof tmp);
+	qsort(tmp, ts_nsrc, sizeof tmp[0], ts_cmp);
+	for (i = 0; i < ts_nsrc && i < 40; i++)
+		printf("TEXA,%u,%u,%u,%08x,%08x,%u,%u,%u,%u\n", frame, (tmp[i].info >> 12) & 7, (tmp[i].info >> 11) & 1,
+		       tmp[i].dl, tmp[i].bhv, tmp[i].loads, tmp[i].bytes, tmp[i].rep, tmp[i].held);
+}
+static void texstat_cmd(uint32_t cmd, const uint32_t *w)
+{
+	if (cmd == 0x2C && ((w[0] >> 18) & 0xF) == 0xA && texstat_on == 2) {
+		unsigned kind = (w[0] >> 15) & 7, slot = (w[0] >> 3) & 0xFF;
+		if (kind == 5) ts_bhv = w[1];
+		else if (kind == 2) { ts_cur = ts_src_find(w[1], slot < 0xFE ? ts_bhv : 0, w[0] & 0x7800); ts_bhv = 0; }
+		else ts_cur = ts_src_find(0xF0000000 | kind, 0, 0);
+	}
+	else if (cmd == 0x3D) { ts_img_w0 = w[0]; ts_img_w1 = w[1] & 0x3FFFFFF; }
+	else if (cmd == 0x35 && ((w[1] >> 24) & 7) == 7) { ts_tile7_w0 = w[0]; ts_tile7_w1 = w[1]; }
+	else if (cmd == 0x30) { ts_prev[0] = ~0u; }   /* a palette load changes TMEM */
+	else if (cmd == 0x33 || cmd == 0x34) {
+		uint32_t texels, bytes, key[6]; unsigned i, siz = (ts_img_w0 >> 19) & 3, found = 0;
+		if (cmd == 0x33) texels = ((w[1] >> 12) & 0xFFF) - ((w[0] >> 12) & 0xFFF) + 1;
+		else texels = ((((w[1] >> 12) & 0xFFF) - ((w[0] >> 12) & 0xFFF)) / 4 + 1) * (((w[1] & 0xFFF) - (w[0] & 0xFFF)) / 4 + 1);
+		bytes = siz == 0 ? texels / 2 : texels << (siz - 1);
+		ts_loads++; ts_bytes += bytes;
+		for (i = 0; i < ts_nseen; i++) if (ts_seen[i] == ts_img_w1) { found = 1; break; }
+		if (found) ts_rep += bytes;
+		else if (ts_nseen < 512) ts_seen[ts_nseen++] = ts_img_w1;
+		key[0] = ts_img_w0; key[1] = ts_img_w1; key[2] = ts_tile7_w0; key[3] = ts_tile7_w1; key[4] = w[0]; key[5] = w[1];
+		if (texstat_on == 2) {
+			struct ts_src *c = &ts_src[ts_cur];
+			c->loads++; c->bytes += bytes; if (found) c->rep += bytes;
+			if (!memcmp(key, ts_prev, sizeof key)) c->held += bytes;
+		}
+		if (!memcmp(key, ts_prev, sizeof key)) ts_held += bytes;
+		memcpy(ts_prev, key, sizeof key);
+	}
+}
+static void texstat_frame_end(unsigned frame)
+{
+	if (texstat_on <= 0) return;
+	if (texstat_on == 2 && frame % 300 == 0) texstat_attr_print(frame);
+	printf("TEX,%u,%u,%u,%u,%u,%u\n", frame, ts_loads, ts_bytes, ts_rep, ts_held, ts_nseen);
+	ts_loads = ts_bytes = ts_rep = ts_held = 0; ts_nseen = 0;
+}
+
 static void rdpstat_log_cmd(uint32_t cmd, uint32_t cmd_length)
 {
 	static int inited = 0; static unsigned from = 1, to = 0; const char *e; uint32_t i;
+	if (texstat_on < 0) texstat_on = getenv("CEN64_TEXSTAT") ? atoi(getenv("CEN64_TEXSTAT")) : 0;
+	if (texstat_on) texstat_cmd(cmd, &rdp_cmd_data[rdp_cmd_cur]);
 	if (!inited) {
 		inited = 1; e = getenv("CEN64_DUMP_CMD");
 		if (e) { from = (unsigned)atoi(e); e = strchr(e, ':'); if (e) to = (unsigned)atoi(e + 1); }
@@ -7524,6 +7597,7 @@ static void rdpstat_log_cmd(uint32_t cmd, uint32_t cmd_length)
 
 static void rdpstat_report(void)
 {
+	texstat_frame_end(rdpstat.frame);
 	rdpstat_dump_fb();
 	if (cmdhash_on > 0) {
 		printf("CMDH,%u,%u,%08x,%u,%08x,%08x,%08x\n", rdpstat.frame, cmdhash_n, cmdhash_h, cmdhash_tn, cmdhash_t, cmdhash_nz, cmdhash_tnz);
