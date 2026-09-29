@@ -52,7 +52,18 @@ void rdp_idle_interval_end(struct rdp_timing *t) {
 
 // CEN64_DPC_PREFETCH: the fetch pointer - the end of the entries within n bytes of the executing
 // one, not past a queued transfer (kind 1) - as DPC_CURRENT.
+// CEN64_DPC_SWITCH=1 (with CEN64_DPC_PREFETCH): as a console's command DMA, the fetch runs on into a
+// queued transfer once the old one is fetched: DPC_CURRENT = the queued START at once (and stays
+// there while the buffered commands of the old transfer execute), START_VALID (and END_VALID) stay
+// set until the fetch has begun the queued transfer; fetched bytes are counted by the dword.
 static int dpc_prefetch = -1;
+static int dpc_switch = -1;
+static void dpc_env(void) {
+  if (dpc_prefetch < 0)
+    dpc_prefetch = getenv("CEN64_DPC_PREFETCH") ? atoi(getenv("CEN64_DPC_PREFETCH")) : 0;
+  if (dpc_switch < 0)
+    dpc_switch = getenv("CEN64_DPC_SWITCH") != NULL && dpc_prefetch > 0;
+}
 static uint32_t dpc_fetch_pointer(struct rdp_timing *t) {
   unsigned i = t->head;
   uint32_t base = t->ring[t->head].cur, p = t->ring[t->head].cur;
@@ -68,6 +79,82 @@ static uint32_t dpc_fetch_pointer(struct rdp_timing *t) {
   }
   return p;
 }
+// CEN64_DPC_SWITCH: the fetch window. Returns the fetch pointer; *end_i = the first entry not wholly
+// fetched (t->tail if none), *part = its fetched bytes, *begun = queued transfers the fetch began.
+static uint32_t dpc_fetch_window(struct rdp_timing *t, unsigned *end_i, uint32_t *part, unsigned *begun) {
+  unsigned i = t->head;
+  uint32_t p = t->ring[t->head].cur, n = 0;
+  *part = 0;
+  *begun = 0;
+  while (i != t->tail) {
+    const struct rdp_timing_entry *e = &t->ring[i];
+    if (e->kind == 1) {
+      p = e->cur; // the old transfer is fetched: the DMA takes the queued START
+      (*begun)++;
+    } else {
+      uint32_t len = e->next - e->cur;
+      if (n + len > (uint32_t) dpc_prefetch) {
+        *part = ((uint32_t) dpc_prefetch - n) & ~7u;
+        p = e->cur + *part;
+        break;
+      }
+      n += len;
+      p = e->next;
+    }
+    i = (i + 1) & (RDP_TIMING_RING - 1);
+  }
+  *end_i = i;
+  return p;
+}
+
+// CEN64_FIFO_CHECK=1: an RSP DMA write into RDP commands already committed (DPC_END) but not yet
+// fetched (beyond the fetch window of CEN64_DPC_PREFETCH/SWITCH, or not executed without them)
+// replaces commands a console's RDP would then read: FIFOCLOBBER lines.
+void rdp_fifo_clobber_check(struct rdp *rdp, uint32_t dest, uint32_t len) {
+  struct rdp_timing *t = &rdp->timing;
+  unsigned i, begun;
+  uint32_t part = 0, fp;
+  static unsigned hits = 0;
+  extern unsigned rdpstat_frame_now(void);
+  if (!t->on || t->head == t->tail)
+    return;
+  dpc_env();
+  if (dpc_switch)
+    fp = dpc_fetch_window(t, &i, &part, &begun);
+  else if (dpc_prefetch > 0) {
+    // the old model: entries up to the fetch pointer (not past a queued transfer) are fetched
+    uint32_t base = t->ring[t->head].cur;
+    fp = t->ring[t->head].kind != 1 ? dpc_fetch_pointer(t) : t->ring[t->head].cur;
+    for (i = t->head; i != t->tail; i = (i + 1) & (RDP_TIMING_RING - 1)) {
+      const struct rdp_timing_entry *e = &t->ring[i];
+      if (e->kind == 1 && i != t->head)
+        break;
+      if (e->kind != 1 && e->next == fp) { i = (i + 1) & (RDP_TIMING_RING - 1); break; }
+      if (e->kind != 1 && e->next - base >= (uint32_t) dpc_prefetch) break;
+    }
+  } else {
+    fp = t->ring[t->head].cur;
+    i = t->head;
+  }
+  for (; i != t->tail; i = (i + 1) & (RDP_TIMING_RING - 1), part = 0) {
+    const struct rdp_timing_entry *e = &t->ring[i];
+    uint32_t a, b;
+    if (e->kind == 1)
+      continue;
+    a = e->cur + part;
+    b = e->next;
+    if (dest < b && a < dest + len) {
+      hits++;
+      if (hits <= 40)
+        printf("FIFOCLOBBER,%llu,%u,%06x,%x,%06x,%06x,fetch=%06x,exec=%06x,start=%06x,end=%06x,queued=%u,sp=%x\n",
+               (unsigned long long) t->now, rdpstat_frame_now(), dest, len, a, b, fp, t->ring[t->head].cur,
+               rdp->regs[DPC_START_REG], rdp->regs[DPC_END_REG], t->start_valid, *g_rdp_rsp_status);
+      else if ((hits & 255) == 0)
+        printf("FIFOCLOBBERS,%u\n", hits);
+      return;
+    }
+  }
+}
 
 // Reads a word from the DP MMIO register space.
 int read_dp_regs(void *opaque, uint32_t address, uint32_t *word) {
@@ -79,9 +166,17 @@ int read_dp_regs(void *opaque, uint32_t address, uint32_t *word) {
   if (rdp->timing.on) {
     struct rdp_timing *t = &rdp->timing;
     static int n = 0;
-    if (dpc_prefetch < 0)
-      dpc_prefetch = getenv("CEN64_DPC_PREFETCH") ? atoi(getenv("CEN64_DPC_PREFETCH")) : 0;
-    if (reg == DPC_CURRENT_REG && t->head != t->tail)
+    unsigned begun = 0;
+    dpc_env();
+    if (dpc_switch && t->head != t->tail && (reg == DPC_CURRENT_REG || reg == DPC_STATUS_REG)) {
+      unsigned end_i;
+      uint32_t part, fp = dpc_fetch_window(t, &end_i, &part, &begun);
+      if (reg == DPC_CURRENT_REG)
+        *word = fp;
+      else // a console: START_VALID (and END_VALID) until the fetch has begun the queued transfer
+        *word |= (t->start_pending || t->start_valid > begun ? 0x400 : 0) | (t->start_valid > begun ? 0x200 : 0)
+                 | 0x160;
+    } else if (reg == DPC_CURRENT_REG && t->head != t->tail)
       *word = dpc_prefetch > 0 && t->ring[t->head].kind != 1 ? dpc_fetch_pointer(t) : t->ring[t->head].cur;
     else if (reg == DPC_CLOCK_REG)
       *word = (uint32_t) (t->now - t->dpc_clock0) & 0xFFFFFF;
@@ -91,6 +186,8 @@ int read_dp_regs(void *opaque, uint32_t address, uint32_t *word) {
       *word = (uint32_t) (t->dpc_busy - t->dpc_cmd0) & 0xFFFFFF;
     else if (reg == DPC_TMEM_REG)
       *word = 0;
+    else if (reg == DPC_STATUS_REG && dpc_switch)
+      *word |= t->start_pending ? 0x400 : 0; // idle (a START latched, no END yet)
     else if (reg == DPC_STATUS_REG)
       *word |= (t->start_pending ? 0x400 : 0) | (t->start_valid ? 0x200 : 0) | (t->head != t->tail ? 0x160 : 0); // START_VALID; END_VALID; DMA/CMD/PIPE busy
     {
@@ -129,10 +226,10 @@ int write_dp_regs(void *opaque, uint32_t address, uint32_t word, uint32_t dqm) {
       uint32_t cur;
       trace--;
       read_dp_regs(opaque, DP_REGS_BASE_ADDRESS + 4 * DPC_CURRENT_REG, &cur);
-      printf("DPW,%llu,%s,%06x,cur=%06x,exec=%06x,busy=%d,sv=%u,ev=%u,end=%06x\n", (unsigned long long) t->now,
+      printf("DPW,%llu,%s,%06x,cur=%06x,exec=%06x,busy=%d,sv=%u,ev=%u,end=%06x,sp=%x\n", (unsigned long long) t->now,
              reg == DPC_START_REG ? "START" : reg == DPC_END_REG ? "END" : "STATUS", word, cur,
              t->head != t->tail ? t->ring[t->head].cur : rdp->regs[DPC_CURRENT_REG], t->head != t->tail,
-             t->start_pending, t->start_valid, rdp->regs[DPC_END_REG]);
+             t->start_pending, t->start_valid, rdp->regs[DPC_END_REG], *g_rdp_rsp_status);
     }
   }
   if (rdp->timing.on && rdp_dbg()) {

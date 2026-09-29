@@ -545,6 +545,7 @@ struct rdpstat_t {
     unsigned spans;
 };
 static struct rdpstat_t rdpstat;
+unsigned rdpstat_frame_now(void);
 #include "common/bus_traffic.h"
 #include "bus/rdram_model.h"
 #include <stdlib.h>
@@ -11043,3 +11044,5 @@ static inline void lodfrac_lodtile_signals(int lodclamp, int32_t lod, uint32_t* 
 	*lfdst = lf;
 }
 
+
+unsigned rdpstat_frame_now(void) { return rdpstat.frame; }

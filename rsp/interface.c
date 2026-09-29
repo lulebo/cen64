@@ -18,6 +18,8 @@
 #include "bus/rdram_model.h"
 #include "vr4300/dcache.h"
 #include <stdlib.h>
+#include <string.h>
+#include <stdio.h>
 
 // CEN64_STALE=1: RSP DMA reads of lines the CPU holds dirty in its D-cache (stale RDRAM data).
 struct vr4300_dcache *g_stale_dcache = NULL;
@@ -65,6 +67,21 @@ void rsp_dma_read(struct rsp *rsp) {
     rdram_rsp_dma(rsp->regs[RSP_CP0_REGISTER_DMA_DRAM] & 0x7FFFF8, length, count, skip, 0);
   if (g_rsp_task_is_audio) g_bus.rsp_aud_rb += (uint64_t) length * (count + 1);
 
+  {
+    static int tr = -1; static unsigned tfrom = 0, tto = 0;
+    extern unsigned rdpstat_frame_now(void);
+    if (tr < 0) {
+      const char *e = getenv("CEN64_SPDMA_TRACE");
+      tr = e != NULL;
+      if (e) { tfrom = (unsigned) atoi(e); e = strchr(e, ':'); if (e) tto = (unsigned) atoi(e + 1); }
+    }
+    if (tr && !g_rsp_task_is_audio) {
+      unsigned f = rdpstat_frame_now();
+      if (f >= tfrom && f <= tto)
+        printf("SPDMA,%u,%06x,%04x,%x\n", f, rsp->regs[RSP_CP0_REGISTER_DMA_DRAM] & 0x7FFFFC,
+               rsp->regs[RSP_CP0_REGISTER_DMA_CACHE] & 0x1FFC, length);
+    }
+  }
   do {
     uint32_t source = rsp->regs[RSP_CP0_REGISTER_DMA_DRAM] & 0x7FFFFC;
     stale_check(source, length);
@@ -125,6 +142,14 @@ void rsp_dma_write(struct rsp *rsp) {
     rdram_rsp_dma(rsp->regs[RSP_CP0_REGISTER_DMA_DRAM] & 0x7FFFF8, length, count, skip, 1);
   if (g_rsp_task_is_audio) g_bus.rsp_aud_wb += (uint64_t) length * (count + 1);
 
+  {
+    static int fifo_check = -1;
+    extern void rdp_fifo_clobber_check(struct rdp *rdp, uint32_t dest, uint32_t len);
+    if (fifo_check < 0) fifo_check = getenv("CEN64_FIFO_CHECK") != NULL;
+    if (fifo_check && !g_rsp_task_is_audio && g_rdram_rdp != NULL)
+      rdp_fifo_clobber_check(g_rdram_rdp, rsp->regs[RSP_CP0_REGISTER_DMA_DRAM] & 0x7FFFF8,
+                             (length + skip) * count + length);
+  }
   do {
     uint32_t dest = rsp->regs[RSP_CP0_REGISTER_DMA_DRAM] & 0x7FFFFC;
     uint32_t source = rsp->regs[RSP_CP0_REGISTER_DMA_CACHE] & 0x1FFC;
