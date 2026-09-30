@@ -7608,9 +7608,25 @@ static void texstat_frame_end(unsigned frame)
 	ts_loads = ts_bytes = ts_rep = ts_held = 0; ts_nseen = 0;
 }
 
+static uint32_t ts_load_bytes; /* bytes of the last texture load (the timing model's per-byte price) */
+static uint32_t ts_timg_siz;
+static void ts_load_track(uint32_t cmd, const uint32_t *w)
+{
+	if (cmd == 0x3D) ts_timg_siz = (w[0] >> 19) & 3;
+	else if (cmd == 0x33) {
+		uint32_t texels = ((w[1] >> 12) & 0xFFF) - ((w[0] >> 12) & 0xFFF) + 1;
+		ts_load_bytes = ts_timg_siz == 0 ? texels / 2 : texels << (ts_timg_siz - 1);
+	} else if (cmd == 0x34) {
+		uint32_t texels = ((((w[1] >> 12) & 0xFFF) - ((w[0] >> 12) & 0xFFF)) / 4 + 1) * (((w[1] & 0xFFF) - (w[0] & 0xFFF)) / 4 + 1);
+		ts_load_bytes = ts_timg_siz == 0 ? texels / 2 : texels << (ts_timg_siz - 1);
+	} else if (cmd == 0x30) {
+		ts_load_bytes = ((((w[1] >> 12) & 0xFFF) - ((w[0] >> 12) & 0xFFF)) / 4 + 1) * 2;
+	}
+}
 static void rdpstat_log_cmd(uint32_t cmd, uint32_t cmd_length)
 {
 	static int inited = 0; static unsigned from = 1, to = 0; const char *e; uint32_t i;
+	ts_load_track(cmd, &rdp_cmd_data[rdp_cmd_cur]);
 	if (texstat_on < 0) texstat_on = getenv("CEN64_TEXSTAT") ? atoi(getenv("CEN64_TEXSTAT")) : 0;
 	if (texstat_on) texstat_cmd(cmd, &rdp_cmd_data[rdp_cmd_cur]);
 	if (!inited) {
@@ -8240,7 +8256,7 @@ static void rdp_timing_account(uint32_t cmd, uint32_t addr, uint32_t len, const 
 	t->fcmd++;
 	if (cmd >= 8 && cmd <= 15) { cost += t->ctri; t->ftri++; }
 	else if (cmd == 0x24 || cmd == 0x25 || cmd == 0x36) cost += t->crect;
-	else if (cmd == 0x30 || cmd == 0x33 || cmd == 0x34) { cost += t->ctmem; t->ftmem++; }
+	else if (cmd == 0x30 || cmd == 0x33 || cmd == 0x34) { cost += t->ctmem + t->ctmemb * ts_load_bytes; t->ftmem++; }
 	switch (other_modes.cycle_type & 3) {
 		case CYCLE_TYPE_1: cost += px * t->c1; t->fpx1 += px; break;
 		case CYCLE_TYPE_2: cost += px * t->c2; t->fpx2 += px; break;
