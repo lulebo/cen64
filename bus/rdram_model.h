@@ -14,7 +14,17 @@
 //        follow the modelled clock, as with -rdptime);
 //   VI   one line fetch per active line; a refresh per line (closes the open rows);
 //   PI   cart -> RDRAM writes in 128-byte bursts at the PI's pace.
-// Not validated against hardware: parameters are calibration knobs (-rdrammodel).
+//
+// eng=1 (default): the RDP as a pipeline (front end, pixel stage, posted writes). A span
+// is cut into chunks of `chunk` pixels; a chunk's reads (z, colour) are issued by the
+// front end up to rdp_d chunks ahead of the pixel stage, its data arrives rd_lat clocks
+// after the channel transfer; the pixel stage takes px1/px2 cycles per pixel (+ span at a
+// span's first chunk) once the data is there; the chunk's writes (only the pixels that
+// passed z) are posted and go out FCFS; the pixel stage waits when rdp_dw chunks' writes
+// are outstanding. rdp_sb=1: a span's first read waits for all earlier writes (no
+// read-before-write hazard). Pipe / full syncs drain the pipeline and the writes.
+// eng=0: the earlier serial replay (reads, pixels, writes in order).
+// Calibrated against the console's HWCAL boot tests (tools: rdram_replay + rdpfit.py).
 //
 #ifndef CEN64_BUS_RDRAM_MODEL_H
 #define CEN64_BUS_RDRAM_MODEL_H
@@ -38,7 +48,7 @@ struct rdram_params {
   double px1, px2, fill, copy; // RDP cycles per pixel by cycle type
   double tri, rect, cmd, tmem8, sync, span; // RDP cycles per triangle, rectangle, command,
                                             // 8 TMEM bytes, full sync, span
-  double overlap;    // 1: a span's pixel cycles overlap its memory accesses (max), 0: add
+  double overlap;    // eng=0: 1 = a span's pixel cycles overlap its memory accesses (max), 0: add
   double bank_bits;  // log2 of the bank size (20 = 1 MB)
   double row_bits;   // log2 of the row size (11 = 2 KB)
   double pi_gap;     // RCP cycles between the PI's bursts
@@ -47,8 +57,29 @@ struct rdram_params {
   double cpu_bus, rsp_bus; // experiments: share of their transactions' time the CPU / RSP hold the channel
   double cpu_rows, rsp_rows; // experiments: 1 = their open rows are tracked apart (never share a bank)
   double iso1_lo, iso1_hi, iso2_lo, iso2_hi, iso3_lo, iso3_hi; // experiments: address ranges (physical) with a bank of their own
+  double chunk;      // pixels per RDP span chunk; 0 = whole span
+  double eng;        // 1: the pipelined RDP engine, 0: the serial replay
+  double rd_lat;     // eng=1: clocks from the end of an RDP read's transfer to its data in the pipeline
+  double rdp_d;      // eng=1: chunks whose reads may be issued ahead of the pixel stage (>= 1)
+  double rdp_dw;     // eng=1: chunks whose writes may be outstanding (0: no limit)
+  double rdp_sb;     // eng=1: span barrier: 1 = a span's reads wait for earlier writes, 2 = for earlier pixels
+  double rdp_rprio;  // eng=1: 1 = the RDP's reads go before its writes requested at the same time
+  double span_r;     // eng=1: front-end RCP cycles per span (rasterizer)
+  double tta;        // channel clocks when the direction (read / write) changes back to back
+  double psync;      // eng=1: RCP cycles of a pipe sync after the drain
+  double fchunk;     // eng=1: pixels per fill / copy chunk
+  double fetch_block; // eng=1: 1 = the front end waits for its command fetches
+  double span_rs;    // eng=1: RCP cycles per read stream (z, colour) at a span's start
+  double span_ws;    // eng=1: RCP cycles per write stream at the start of a span that writes
+  double align8;     // eng=1: 1 = RDP transfers cover whole octbytes, 2 = chunks aligned in memory too
+  double rd_occ;     // eng=1: share of the read delay an RDP read holds the channel (the rest is latency)
+  double bank_busy;  // clocks from an access's start before its bank takes the next one (0: off)
+  double cpu_wbv;    // CPU cycles of a dirty victim's write-back before a D-cache refill
+  double bank_rdp;   // 1: bank_busy applies between the RDP's own accesses only
+  double cpu_rocc;   // extra clocks a CPU cache-line fill holds the channel
+  double cpu_prio;   // >= 0: a CPU transfer cuts into another agent's after this many clocks
 };
-#define RDRAM_NPARAMS 30
+#define RDRAM_NPARAMS 51
 
 struct rdram_stat { uint64_t n, bytes, busy, wait, hits, misses; };
 
@@ -56,7 +87,10 @@ struct rdram_model {
   int on;
   uint64_t now;       // RDRAM clocks
   uint64_t bus_free;  // the channel is free from here
+  int last_dir;       // direction of the last transfer (0 read, 1 write, -1 none)
+  int last_agent;     // agent of the last transfer (-1 none)
   int32_t open_row[32];
+  uint64_t bank_free[32]; // bank_busy: the bank takes its next access from here
   int8_t row_owner[32];
   uint64_t conflict[RA_N][RA_N][8];
   struct rdram_params p;
@@ -78,7 +112,7 @@ extern struct rdp *g_rdram_rdp;
 
 // CPU (return the stall in CPU cycles, total)
 unsigned rdram_cpu_read(uint32_t paddr, unsigned bytes, int agent);
-void rdram_cpu_victim(uint32_t paddr);
+unsigned rdram_cpu_victim(uint32_t paddr);
 unsigned rdram_cpu_cacheop_wb(uint32_t paddr);
 unsigned rdram_cpu_uncached_write(uint32_t paddr, unsigned bytes);
 
@@ -89,11 +123,15 @@ unsigned rdram_rsp_dma_inflight(void);
 // RDP work (emitted while angrylion executes the command)
 void rdram_rdp_cmd_begin(uint32_t cmd, uint32_t addr, uint32_t len, int xbus);
 void rdram_rdp_span(uint32_t fb, uint32_t z, int len, int bpp4, int cycle_type,
-                    int image_read, int z_compare, int z_update);
+                    int image_read, int z_compare, int z_update, int y, int xmin);
+void rdram_px_written(int x);
+void rdram_rdp_span_written(uint32_t fb, uint32_t z, int len, int bpp4, int cycle_type,
+                            int image_read, int z_compare, int z_update, int wn, int wlo, int whi);
 void rdram_rdp_texload(uint32_t addr, uint32_t bytes);
 void rdram_rdp_mark(unsigned ring_index);
 int rdram_rdp_pending(void);
 void rdram_rdp_flush(void);
+uint64_t rdram_rdp_done_time(void);
 
 // clocks, VI, PI
 void rdram_tick(void);

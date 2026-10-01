@@ -4464,9 +4464,11 @@ static void rdram_span_hook(int i, int flip)
 	uint32_t px = (uint32_t) fb_width * (uint32_t) i + (uint32_t) xmin;
 	if (len <= 0) return;
 	rdram_rdp_span(fb_address + px * bpp4 / 2, zb_address + px * 2, len, bpp4, other_modes.cycle_type & 3,
-	               other_modes.image_read_en, other_modes.z_compare_en, other_modes.z_update_en);
+	               other_modes.image_read_en, other_modes.z_compare_en, other_modes.z_update_en, i, xmin);
 }
 #define RDRAM_SPAN(i, flip) do { if (g_rdram.on) rdram_span_hook((i), (flip)); } while (0)
+/* a pixel written (z pass, blender write): the model writes back only those */
+#define RDRAM_PXW(xx) do { if (g_rdram.on) rdram_px_written(xx); } while (0)
 
 void render_spans_1cycle_complete(int start, int end, int tilenum, int flip)
 {
@@ -4658,7 +4660,7 @@ void render_spans_1cycle_complete(int start, int end, int tilenum, int flip)
 			{
 				if (blender_1cycle(&fir, &fig, &fib, cdith, blend_en, prewrap, curpixel_cvg, curpixel_cvbit))
 				{
-					fbwrite_ptr(curpixel, fir, fig, fib, blend_en, curpixel_cvg, curpixel_memcvg);
+					fbwrite_ptr(curpixel, fir, fig, fib, blend_en, curpixel_cvg, curpixel_memcvg); RDRAM_PXW(x);
 					if (other_modes.z_update_en)
 						z_store(zbcur, sz, dzpixenc);
 				}
@@ -4830,7 +4832,7 @@ void render_spans_1cycle_notexel1(int start, int end, int tilenum, int flip)
 			{
 				if (blender_1cycle(&fir, &fig, &fib, cdith, blend_en, prewrap, curpixel_cvg, curpixel_cvbit))
 				{
-					fbwrite_ptr(curpixel, fir, fig, fib, blend_en, curpixel_cvg, curpixel_memcvg);
+					fbwrite_ptr(curpixel, fir, fig, fib, blend_en, curpixel_cvg, curpixel_memcvg); RDRAM_PXW(x);
 					if (other_modes.z_update_en)
 						z_store(zbcur, sz, dzpixenc);
 				}
@@ -4968,7 +4970,7 @@ void render_spans_1cycle_notex(int start, int end, int tilenum, int flip)
 			{
 				if (blender_1cycle(&fir, &fig, &fib, cdith, blend_en, prewrap, curpixel_cvg, curpixel_cvbit))
 				{
-					fbwrite_ptr(curpixel, fir, fig, fib, blend_en, curpixel_cvg, curpixel_memcvg);
+					fbwrite_ptr(curpixel, fir, fig, fib, blend_en, curpixel_cvg, curpixel_memcvg); RDRAM_PXW(x);
 					if (other_modes.z_update_en)
 						z_store(zbcur, sz, dzpixenc);
 				}
@@ -5175,7 +5177,7 @@ void render_spans_2cycle_complete(int start, int end, int tilenum, int flip)
 			{
 				if (blender_2cycle(&fir, &fig, &fib, cdith, blend_en, prewrap, curpixel_cvg, curpixel_cvbit, acalpha))
 				{
-					fbwrite_ptr(curpixel, fir, fig, fib, blend_en, curpixel_cvg, curpixel_memcvg);
+					fbwrite_ptr(curpixel, fir, fig, fib, blend_en, curpixel_cvg, curpixel_memcvg); RDRAM_PXW(x);
 					if (other_modes.z_update_en)
 						z_store(zbcur, sz, dzpixenc);
 					
@@ -5348,7 +5350,7 @@ void render_spans_2cycle_notexelnext(int start, int end, int tilenum, int flip)
 			{
 				if (blender_2cycle(&fir, &fig, &fib, cdith, blend_en, prewrap, curpixel_cvg, curpixel_cvbit, acalpha))
 				{
-					fbwrite_ptr(curpixel, fir, fig, fib, blend_en, curpixel_cvg, curpixel_memcvg);
+					fbwrite_ptr(curpixel, fir, fig, fib, blend_en, curpixel_cvg, curpixel_memcvg); RDRAM_PXW(x);
 					if (other_modes.z_update_en)
 						z_store(zbcur, sz, dzpixenc);
 				}
@@ -5517,7 +5519,7 @@ void render_spans_2cycle_notexel1(int start, int end, int tilenum, int flip)
 			{
 				if (blender_2cycle(&fir, &fig, &fib, cdith, blend_en, prewrap, curpixel_cvg, curpixel_cvbit, acalpha))
 				{
-					fbwrite_ptr(curpixel, fir, fig, fib, blend_en, curpixel_cvg, curpixel_memcvg);
+					fbwrite_ptr(curpixel, fir, fig, fib, blend_en, curpixel_cvg, curpixel_memcvg); RDRAM_PXW(x);
 					if (other_modes.z_update_en)
 						z_store(zbcur, sz, dzpixenc);
 				}
@@ -5658,7 +5660,7 @@ void render_spans_2cycle_notex(int start, int end, int tilenum, int flip)
 			{
 				if (blender_2cycle(&fir, &fig, &fib, cdith, blend_en, prewrap, curpixel_cvg, curpixel_cvbit, acalpha))
 				{
-					fbwrite_ptr(curpixel, fir, fig, fib, blend_en, curpixel_cvg, curpixel_memcvg);
+					fbwrite_ptr(curpixel, fir, fig, fib, blend_en, curpixel_cvg, curpixel_memcvg); RDRAM_PXW(x);
 					if (other_modes.z_update_en)
 						z_store(zbcur, sz, dzpixenc);
 				}

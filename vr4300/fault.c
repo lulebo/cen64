@@ -350,8 +350,8 @@ void VR4300_DCM(struct vr4300 *vr4300) {
   // Raise interlock condition, get virtual address.
   paddr &= ~0xF;
   if (g_rdram.on) {
-    unsigned st = rdram_cpu_read(paddr, 16, RA_CPU_D);
-    if (model_has_victim) rdram_cpu_victim(model_victim);
+    unsigned st = model_has_victim ? rdram_cpu_victim(model_victim) : 0; // write-back, then refill
+    st += rdram_cpu_read(paddr, 16, RA_CPU_D);
     vr4300_common_interlocks(vr4300, st > 2 ? st - 2 : 0, 1);
   } else
     vr4300_common_interlocks(vr4300, DCACHE_ACCESS_DELAY, 1);

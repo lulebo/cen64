@@ -177,33 +177,61 @@ needs the default single-threaded loop) books every transaction on one RDRAM cha
 
 - The channel serves transactions first-come-first-served in RDRAM clocks (4 ns, 4 per RCP cycle).
   Cost = `req + rdelay` (read) or `req + wdelay` (write) `+ bytes * per_byte`, plus `row_miss` when
-  the bank's open row is another one. Banks are `2^bank_bits` bytes (1 MB), each keeps one open row
-  of `2^row_bits` bytes (2 KB). A refresh per VI line costs `refresh` clocks and closes all rows
-  (`refresh_close`).
+  the bank's open row is another one, plus `tta` when a back-to-back transfer turns the channel
+  around. Banks are `2^bank_bits` bytes (1 MB), each keeps one open row of `2^row_bits` bytes (2 KB)
+  and, with `bank_busy`, takes its next RDP access no earlier than `bank_busy` clocks after the last
+  one started (`bank_rdp=1`: between RDP accesses only). A refresh per VI line costs `refresh` clocks
+  and closes all rows (`refresh_close`).
 - CPU: D-cache fills (16 bytes), I-cache fills (32), uncached reads stall for `cpu_d` / `cpu_i` /
-  `cpu_unc` cycles outside the RDRAM plus the actual wait and service time; a dirty victim is
-  written back behind the fill without stalling; cache-instruction write-backs stall `cpu_wb` +
-  wait + service; uncached writes go through a one-entry write buffer (`cpu_uncw`).
+  `cpu_unc` cycles outside the RDRAM plus the actual wait and service time; a fill holds the channel
+  `cpu_rocc` extra clocks. A dirty victim is written back first (`cpu_wbv` + its transfer), then the
+  fill. Cache-instruction write-backs stall `cpu_wb` + wait + service. An uncached store completes
+  `cpu_uncw` CPU cycles after its transfer (a doubleword is two word writes); the CPU waits only for
+  the previous one. With `cpu_prio >= 0` a CPU transfer that finds another agent's transfer on the
+  channel cuts in after `cpu_prio` clocks and the interrupted transfer finishes after it.
 - RSP: a DMA is split into bursts of at most `burst` bytes inside one row; SP_DMA_BUSY / SP_DMA_FULL
   (and the SP_STATUS bits) stay set until the bursts are done. The data still moves at once.
-- RDP: while angrylion executes a command it emits the work: the command fetch (in `cmd_fetch`
-  chunks), `cmd` cycles (+ `tri`, `rect`, `sync`), texture/TLUT load rows plus `tmem8` cycles per
-  8 bytes, and per span: z read (z compare), colour read (image read), `px1`/`px2` cycles per pixel
-  (1-/2-cycle; `fill`/`copy` for those modes) + `span`, colour write, z write (z update). The work is
-  replayed on the RDP's own clock through the channel (`overlap=1`: a span's pixel cycles overlap
-  its transfers). An idle RDP pays `idle` cycles before its first transaction. DPC_CURRENT, the
-  busy bits and the DP interrupt follow the replay, as with `-rdptime`.
+- RDP (`eng=1`, the default): while angrylion executes a command it emits work items, replayed on
+  the RDP's own clock as a pipeline. The front end takes command costs (`cmd`, + `tri` / `rect`),
+  command fetches (`cmd_fetch` bytes; `fetch_block=1` waits for them), texture loads (bursts, then
+  `tmem8` cycles per 8 bytes) and per span `span_r` cycles. A span is cut into chunks of `chunk`
+  pixels (`align8=2`: chunk boundaries and transfers on octbytes); the front end issues a chunk's
+  reads (z for z compare, colour for image read) once the pixel stage has finished the chunk
+  `rdp_d` back; a read's data arrives `rd_lat` clocks after its transfer, which holds the channel
+  for `rd_occ` of the read delay. The pixel stage takes `px1` / `px2` (`fill`, `copy`) cycles per
+  pixel, + `span` + `span_rs` per read stream + `span_ws` per write stream at a span's first chunk,
+  and posts the chunk's writes - only over the pixels that passed z (the span hook counts them).
+  `rdp_dw` caps the chunks with writes outstanding (0: none), `rdp_rprio=1` puts a read before a
+  write requested at the same time, `rdp_sb` makes a span's first read wait for the earlier writes
+  (1) or pixels (2). Pipe and full syncs drain pixels and writes (+ `psync` / `sync`). The RDP takes
+  the channel one transfer at a time, so other agents get their turn. An idle RDP pays `idle` cycles
+  first. DPC_CURRENT, the busy bits and the DP interrupt follow the replay, as with `-rdptime`.
+  `eng=0`: the earlier serial replay (reads, `chunk` / span pixels, writes; `overlap`).
 - VI: one fetch of `VI_WIDTH * bpp` bytes per active line; PI: cart -> RDRAM writes in 128-byte
   bursts `pi_gap` RCP cycles apart. AI and SI are not modelled (tiny).
 
 `RDRAM,<name>,<window clocks>,<cpu stall cycles>,<what an idle channel would have cost>,<rdp busy clocks>,
 <rsp dma busy clocks>,<agent>:<transactions>:<bytes>:<busy clocks>:<wait clocks>:<row hits>:<row misses>...`
 is printed at every `BENCH_END,` (agents cpu_i, cpu_d, cpu_wb, cpu_unc, rsp, rdp_cmd, rdp_tex, rdp_fb,
-rdp_z, vi, pi, refresh), and the `RDPT,` busy column becomes the replayed RDP time.
+rdp_z, vi, pi, refresh), then `RDRAMX,<name>,<victim>,<opener>,<bank>,<row misses>` (whose transfer
+closed whose open row), and the `RDPT,` busy column becomes the replayed RDP time. Experiments:
+`cpu_rows` / `rsp_rows` give the CPU / RSP open rows of their own, `iso1..3_lo/hi` give address
+ranges banks of their own, `cpu_bus` / `rsp_bus` scale their channel time.
 
-Defaults are calibrated against a ModRetro M64 (firmware 1.8.0 beta), not against a console: the
-Super Mario 64 port's HWSTATS line at two views (BoB and castle-grounds spawns), with and without
-its RDP-overlap pipeline, match within ~7% rms in fps, CPU, RSP and RDP-tail time. RDRAM-datasheet
-style values (`rdelay=7,row_miss=25,span=4,cpu_d=39.25,cpu_i=40.25,cpu_unc=29.5,px1=1,px2=2`) give
-a faster RDP and less CPU slowdown. Use the model for relative comparisons (does a change lower the
-channel load, does the RDP get more of it), then confirm on hardware.
+**Calibration.** The defaults are fitted (2026-10-01) to a console's boot calibration tests (the
+Super Mario 64 port's HWCAL: full-screen layers per render mode, 32x4 against 4x32 rects, z pass
+against z fail, triangles, colour and z in one bank or two, command fetch from DMEM, CPU misses /
+stores / uncached accesses alone and while the RDP draws): the RDP tests within 5.8% rms, the CPU and
+contention tests within ~11%. What the console showed: a span costs a fixed ~14 cycles per read
+stream and ~13 per write stream on top of its pixels, a z-failing span writes nothing, two read
+streams in two banks are cheaper per byte than one in one bank, and a CPU miss waits little behind
+the RDP but costs it ~14 cycles.
+
+`CEN64_SPAN_TRACE=<file>` logs the RDP's work (`C <cmd> <addr> <len> <xbus>`, `S <y> <x> <len> <bpp/4>
+<cycle type> <image read> <z compare> <z update> <pixels written> <first> <last> <colour addr> <z addr>`,
+`T <addr> <bytes>`); `tools/rdram_replay.c` (build: `gcc -O2 -I. -Ibuild -Ios/unix/x86_64 -Ios/unix
+-Iarch/x86_64 tools/rdram_replay.c bus/rdram_model.c`) replays traces through the model without the
+emulator, one parameter string per stdin line, a few hundred lists per second: `R <trace> <list>
+<cycles>` per list ending in a full sync, with the VI scanning (`-novi`: none; `-vimap <file>`:
+`<trace> <list> <origin|off>` per list). That is how the RDP parameters were fitted. Use the model for
+relative comparisons, then confirm on hardware.
