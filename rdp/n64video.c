@@ -7627,13 +7627,21 @@ static void ts_load_track(uint32_t cmd, const uint32_t *w)
 }
 static void rdpstat_log_cmd(uint32_t cmd, uint32_t cmd_length)
 {
-	static int inited = 0; static unsigned from = 1, to = 0; const char *e; uint32_t i;
+	static int inited = 0; static unsigned dump_from[32], dump_to[32]; static int dump_nr = 0; const char *e; uint32_t i;
+	int in_range = 0, r;
 	ts_load_track(cmd, &rdp_cmd_data[rdp_cmd_cur]);
 	if (texstat_on < 0) texstat_on = getenv("CEN64_TEXSTAT") ? atoi(getenv("CEN64_TEXSTAT")) : 0;
 	if (texstat_on) texstat_cmd(cmd, &rdp_cmd_data[rdp_cmd_cur]);
 	if (!inited) {
 		inited = 1; e = getenv("CEN64_DUMP_CMD");
-		if (e) { from = (unsigned)atoi(e); e = strchr(e, ':'); if (e) to = (unsigned)atoi(e + 1); }
+		while (e && *e && dump_nr < 32) { /* "a:b,c:d,..." */
+			dump_from[dump_nr] = (unsigned)atoi(e); dump_to[dump_nr] = dump_from[dump_nr];
+			while (*e && *e != ':' && *e != ',') e++;
+			if (*e == ':') dump_to[dump_nr] = (unsigned)atoi(++e);
+			dump_nr++;
+			while (*e && *e != ',') e++;
+			if (*e == ',') e++;
+		}
 	}
 	if (cmdhash_on < 0) cmdhash_on = getenv("CEN64_CMD_HASH") != NULL;
 	if (cmdhash_on) {
@@ -7656,7 +7664,9 @@ static void rdpstat_log_cmd(uint32_t cmd, uint32_t cmd_length)
 		cmdhash_n++;
 		if (cmd >= 0x08 && cmd <= 0x0F) cmdhash_tn++;
 	}
-	if (rdpstat.frame < from || rdpstat.frame > to) return;
+	for (r = 0; r < dump_nr; r++)
+		if (rdpstat.frame >= dump_from[r] && rdpstat.frame <= dump_to[r]) in_range = 1;
+	if (!in_range) return;
 	printf("CMD,%u,%02x", rdpstat.frame, cmd);
 	for (i = 0; i < cmd_length; i++) printf(",%08x", rdp_cmd_data[rdp_cmd_cur + i]);
 	printf("\n");

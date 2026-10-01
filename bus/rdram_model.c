@@ -25,7 +25,7 @@ static const struct { const char *name; size_t off; } param_tab[] = {
   P(row_bits), P(pi_gap), P(cmd_fetch), P(idle), P(cpu_bus), P(rsp_bus), P(cpu_rows), P(rsp_rows),
   P(iso1_lo), P(iso1_hi), P(iso2_lo), P(iso2_hi), P(iso3_lo), P(iso3_hi), P(chunk),
   P(eng), P(rd_lat), P(rdp_d), P(rdp_dw), P(rdp_sb), P(rdp_rprio), P(span_r), P(tta), P(psync),
-  P(fchunk), P(fetch_block), P(span_rs), P(span_ws), P(align8), P(rd_occ), P(bank_busy), P(cpu_wbv), P(bank_rdp), P(cpu_rocc), P(cpu_prio)
+  P(fchunk), P(fetch_block), P(span_rs), P(span_ws), P(align8), P(rd_occ), P(bank_busy), P(cpu_wbv), P(bank_rdp), P(cpu_rocc), P(cpu_prio), P(span_wfull)
 };
 #undef P
 #define NPARAM (sizeof(param_tab) / sizeof(param_tab[0]))
@@ -644,6 +644,7 @@ static void span_emit(uint32_t fb, uint32_t z, int len, int bpp4, int cycle_type
   double pc;
   if (len <= 0) return;
   if (p->eng > 0) {
+    if (p->span_wfull > 0 && whi >= wlo) { wlo = 0; whi = len - 1; }
     eng_span(fb, z, len, bpp4, cycle_type, image_read, z_compare, z_update, wlo, whi);
     return;
   }
@@ -785,12 +786,13 @@ void rdram_model_init(void) {
     0, 0,                               // cpu_rows rsp_rows (experiments: separate open-row state)
     0, 0, 0, 0, 0, 0,                   // iso ranges (experiments)
     8,                                  // chunk
-    1, 10.58, 2, 0, 2, 1, 4.02, 4.23, 3.72, 8, 0, // eng rd_lat rdp_d rdp_dw rdp_sb rdp_rprio span_r tta psync fchunk fetch_block
+    1, 10.58, 2, 16, 2, 1, 4.02, 4.23, 3.72, 8, 0, // eng rd_lat rdp_d rdp_dw rdp_sb rdp_rprio span_r tta psync fchunk fetch_block
     14.15, 12.76, 2, 0.722,             // span_rs span_ws align8 rd_occ
     17.5,                               // bank_busy
     16.96,                              // cpu_wbv
     1, 4.83,                            // bank_rdp cpu_rocc
-    21.73                               // cpu_prio
+    21.73,                              // cpu_prio
+    0                                   // span_wfull
   };
   const char *s = g_rdram_params ? g_rdram_params : getenv("CEN64_RDRAM_MODEL");
   int i;

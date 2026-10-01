@@ -78,8 +78,9 @@ struct rdram_params {
   double bank_rdp;   // 1: bank_busy applies between the RDP's own accesses only
   double cpu_rocc;   // extra clocks a CPU cache-line fill holds the channel
   double cpu_prio;   // >= 0: a CPU transfer cuts into another agent's after this many clocks
+  double span_wfull; // 1: a span that writes any pixel writes all of them back (masked)
 };
-#define RDRAM_NPARAMS 51
+#define RDRAM_NPARAMS 52
 
 struct rdram_stat { uint64_t n, bytes, busy, wait, hits, misses; };
 
