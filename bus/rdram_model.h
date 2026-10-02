@@ -79,8 +79,12 @@ struct rdram_params {
   double cpu_rocc;   // extra clocks a CPU cache-line fill holds the channel
   double cpu_prio;   // >= 0: a CPU transfer cuts into another agent's after this many clocks
   double span_wfull; // 1: a span that writes any pixel writes all of them back (masked)
+  double ew_line;    // eng=1: RCP cycles per scanline the edge walker steps above the scissor box
+  double row_xmiss;  // extra clocks for a row miss where another agent opened the bank's row
+  double vi_rows;    // experiment: 1 = the VI's open rows are tracked apart (it never shares a bank)
+  double vi_burst;   // bytes per VI fetch transfer (0: burst)
 };
-#define RDRAM_NPARAMS 52
+#define RDRAM_NPARAMS 56
 
 struct rdram_stat { uint64_t n, bytes, busy, wait, hits, misses; };
 
@@ -129,6 +133,7 @@ void rdram_px_written(int x);
 void rdram_rdp_span_written(uint32_t fb, uint32_t z, int len, int bpp4, int cycle_type,
                             int image_read, int z_compare, int z_update, int wn, int wlo, int whi);
 void rdram_rdp_texload(uint32_t addr, uint32_t bytes);
+void rdram_rdp_tri_walk(int lines);
 void rdram_rdp_mark(unsigned ring_index);
 int rdram_rdp_pending(void);
 void rdram_rdp_flush(void);

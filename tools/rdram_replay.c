@@ -35,6 +35,10 @@ static void load(struct trace *t, const char *path) {
       e.k = 'S'; e.len = (uint16_t) len; e.bpp4 = (uint8_t) bpp4; e.ct = (uint8_t) ct; e.ir = (uint8_t) ir;
       e.zc = (uint8_t) zc; e.zu = (uint8_t) zu; e.n = (int16_t) n; e.lo = (int16_t) lo; e.hi = (int16_t) hi;
       e.a = fb; e.b = z;
+    } else if (line[0] == 'W') {
+      int lines;
+      if (sscanf(line + 2, "%d", &lines) != 1) continue;
+      e.k = 'W'; e.a = (uint32_t) lines;
     } else if (line[0] == 'T') {
       unsigned addr, bytes;
       if (sscanf(line + 2, "%x %u", &addr, &bytes) != 2) continue;
@@ -129,6 +133,8 @@ int main(int argc, char **argv) {
             if (e->a == 0x29) { j++; break; }
           } else if (e->k == 'S') {
             rdram_rdp_span_written(e->a, e->b, e->len, e->bpp4, e->ct, e->ir, e->zc, e->zu, e->n, e->lo, e->hi);
+          } else if (e->k == 'W') {
+            rdram_rdp_tri_walk((int) e->a);
           } else
             rdram_rdp_texload(e->a, e->b);
         }

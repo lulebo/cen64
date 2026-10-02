@@ -6419,6 +6419,7 @@ static void edgewalker_for_prims(int32_t* ewdata)
 	yhlimit = yhlimit ? yh : clip.yh;
 
 	int yhclose = yhlimit & ~3;
+	if (g_rdram.on && yhlimit > ycur) rdram_rdp_tri_walk((yhlimit >> 2) - (ycur >> 2));
 	if (OV_ACTIVE) {
 		{ int _r = ((ylfar >> 2) - (ycur >> 2)) + 1; OV_P.rows = _r > 0 ? (uint32_t)_r : 0; }
 		OV_P.above = yh < (int32_t)clip.yh ? (uint32_t)((((int32_t)clip.yh & ~3) - (yh & ~3)) >> 2) : 0;

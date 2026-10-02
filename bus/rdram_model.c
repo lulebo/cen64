@@ -25,7 +25,7 @@ static const struct { const char *name; size_t off; } param_tab[] = {
   P(row_bits), P(pi_gap), P(cmd_fetch), P(idle), P(cpu_bus), P(rsp_bus), P(cpu_rows), P(rsp_rows),
   P(iso1_lo), P(iso1_hi), P(iso2_lo), P(iso2_hi), P(iso3_lo), P(iso3_hi), P(chunk),
   P(eng), P(rd_lat), P(rdp_d), P(rdp_dw), P(rdp_sb), P(rdp_rprio), P(span_r), P(tta), P(psync),
-  P(fchunk), P(fetch_block), P(span_rs), P(span_ws), P(align8), P(rd_occ), P(bank_busy), P(cpu_wbv), P(bank_rdp), P(cpu_rocc), P(cpu_prio), P(span_wfull)
+  P(fchunk), P(fetch_block), P(span_rs), P(span_ws), P(align8), P(rd_occ), P(bank_busy), P(cpu_wbv), P(bank_rdp), P(cpu_rocc), P(cpu_prio), P(span_wfull), P(ew_line), P(row_xmiss), P(vi_rows), P(vi_burst)
 };
 #undef P
 #define NPARAM (sizeof(param_tab) / sizeof(param_tab[0]))
@@ -72,7 +72,8 @@ uint64_t rdram_access(uint64_t t, uint32_t addr, uint32_t bytes, int write, int 
     if (at < m->bus_free) { start = at; cut = 1; }
   }
   unsigned bank = (addr >> (unsigned) m->p.bank_bits) & 15;
-  if ((agent <= RA_CPU_UNC && m->p.cpu_rows > 0) || (agent == RA_RSP && m->p.rsp_rows > 0))
+  if ((agent <= RA_CPU_UNC && m->p.cpu_rows > 0) || (agent == RA_RSP && m->p.rsp_rows > 0)
+      || (agent == RA_VI && m->p.vi_rows > 0))
     bank += 16;
   else if (addr >= (uint32_t) m->p.iso1_lo && addr < (uint32_t) m->p.iso1_hi) bank = 29;
   else if (addr >= (uint32_t) m->p.iso2_lo && addr < (uint32_t) m->p.iso2_hi) bank = 30;
@@ -86,6 +87,7 @@ uint64_t rdram_access(uint64_t t, uint32_t addr, uint32_t bytes, int write, int 
   uint64_t c;
   if (m->open_row[bank] != row) {
     cost += m->p.row_miss;
+    if (m->row_owner[bank] >= 0 && m->row_owner[bank] != agent) cost += m->p.row_xmiss;
     if (m->open_row[bank] >= 0 && m->row_owner[bank] >= 0)
       m->conflict[agent][m->row_owner[bank]][(addr >> 20) & 7]++;
     m->open_row[bank] = row;
@@ -700,6 +702,19 @@ void rdram_rdp_texload(uint32_t addr, uint32_t bytes) {
   push_cycles(Q_RDP, (bytes + 7) / 8 * g_rdram.p.tmem8);
 }
 
+// a triangle's scanlines above the scissor box: the edge walker steps them before the first span
+static uint64_t walk_lines = 0, walk_tris = 0; // since the last window reset
+
+void rdram_rdp_tri_walk(int lines) {
+  span_flush();
+  if (lines <= 0) return;
+  walk_lines += (uint64_t) lines;
+  walk_tris++;
+  if (span_trace) fprintf(span_trace, "W %d\n", lines);
+  if (g_rdram.p.eng > 0) eng_front(lines * g_rdram.p.ew_line);
+  else push_cycles(Q_RDP, lines * g_rdram.p.ew_line);
+}
+
 void rdram_rdp_mark(unsigned ring_index) {
   span_flush();
   if (g_rdram.p.eng > 0) {
@@ -740,7 +755,18 @@ void rdram_tick(void) {
   if (rsp_inflight) m->rsp_dma_busy += 4;
 }
 
-void rdram_vi_line(uint32_t addr, uint32_t bytes) { push_mem(Q_VI, 0, RA_VI, addr, bytes); }
+void rdram_vi_line(uint32_t addr, uint32_t bytes) {
+  // the VI's own transfer size (vi_burst), split at rows like the other agents' DMAs
+  uint32_t rowsz = 1u << (unsigned) g_rdram.p.row_bits;
+  uint32_t burst = (uint32_t) (g_rdram.p.vi_burst > 0 ? g_rdram.p.vi_burst : g_rdram.p.burst);
+  if (burst < 8) burst = 8;
+  while (bytes > 0) {
+    uint32_t n = bytes < burst ? bytes : burst, to_row = rowsz - (addr & (rowsz - 1));
+    if (n > to_row) n = to_row;
+    push(Q_VI, IT_RD, RA_VI, addr & 0x7FFFFF, n);
+    addr += n; bytes -= n;
+  }
+}
 
 void rdram_refresh(void) {
   struct rdram_model *m = &g_rdram;
@@ -792,7 +818,11 @@ void rdram_model_init(void) {
     16.96,                              // cpu_wbv
     1, 4.83,                            // bank_rdp cpu_rocc
     21.73,                              // cpu_prio
-    0                                   // span_wfull
+    0,                                  // span_wfull
+    8,                                  // ew_line
+    0,                                  // row_xmiss
+    0,                                  // vi_rows
+    0                                   // vi_burst (0: burst)
   };
   const char *s = g_rdram_params ? g_rdram_params : getenv("CEN64_RDRAM_MODEL");
   int i;
@@ -836,6 +866,7 @@ void rdram_window_reset(void) {
   memset(m->conflict, 0, sizeof(m->conflict));
   m->cpu_stall = m->cpu_idle = m->rdp_busy = m->rsp_dma_busy = 0;
   m->window_start = m->now;
+  walk_lines = walk_tris = 0;
 }
 
 // RDRAM,<name>,<window clocks>,<cpu stall>,<cpu idle-channel stall>,<rdp busy clocks>,<rsp dma busy clocks>,
@@ -853,6 +884,8 @@ void rdram_window_report(const char *name) {
            (unsigned long long) s->hits, (unsigned long long) s->misses);
   }
   printf("\n");
+  /* RDRAMW,<name>,<triangles with scanlines above the scissor>,<those scanlines> (edge walker) */
+  printf("RDRAMW,%s,%llu,%llu\n", name, (unsigned long long) walk_tris, (unsigned long long) walk_lines);
   /* RDRAMX,<name>,<victim>,<opener>,<bank>,<row misses>: which agent's access closed whose row */
   {
     int a, b, k;
