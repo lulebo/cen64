@@ -98,6 +98,8 @@ struct rdram_model {
   uint64_t bank_free[32]; // bank_busy: the bank takes its next access from here
   int8_t row_owner[32];
   uint64_t conflict[RA_N][RA_N][8];
+  uint64_t acc_mb[RA_N][8], bytes_mb[RA_N][8]; // accesses / bytes per agent per MB (RDRAMA lines)
+  uint32_t acc_blk[RA_N][512]; // accesses per agent per 16 KB block (RDRAMH lines)
   struct rdram_params p;
   struct rdram_stat st[RA_N];
   uint64_t cpu_stall, cpu_idle;   // CPU stall cycles charged / what an idle channel would cost

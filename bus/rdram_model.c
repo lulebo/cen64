@@ -113,6 +113,8 @@ uint64_t rdram_access(uint64_t t, uint32_t addr, uint32_t bytes, int write, int 
     m->last_agent = agent;
     if (use_bank) m->bank_free[bank] = start + (c > m->p.bank_busy ? c : (uint64_t) (m->p.bank_busy + 0.5));
     s->n++; s->bytes += bytes; s->busy += cb; s->wait += start - t;
+    m->acc_mb[agent][(addr >> 20) & 7]++; m->bytes_mb[agent][(addr >> 20) & 7] += bytes;
+    m->acc_blk[agent][(addr >> 14) & 511]++;
   }
   return start + c;
 }
@@ -865,6 +867,9 @@ void rdram_window_reset(void) {
   struct rdram_model *m = &g_rdram;
   memset(m->st, 0, sizeof(m->st));
   memset(m->conflict, 0, sizeof(m->conflict));
+  memset(m->acc_mb, 0, sizeof(m->acc_mb));
+  memset(m->acc_blk, 0, sizeof(m->acc_blk));
+  memset(m->bytes_mb, 0, sizeof(m->bytes_mb));
   m->cpu_stall = m->cpu_idle = m->rdp_busy = m->rsp_dma_busy = 0;
   m->window_start = m->now;
   walk_lines = walk_tris = 0;
@@ -887,6 +892,25 @@ void rdram_window_report(const char *name) {
   printf("\n");
   /* RDRAMW,<name>,<triangles with scanlines above the scissor>,<those scanlines> (edge walker) */
   printf("RDRAMW,%s,%llu,%llu\n", name, (unsigned long long) walk_tris, (unsigned long long) walk_lines);
+  /* RDRAMA,<name>,<agent>,<accesses MB 0..3>,<bytes MB 0..3>: where each agent's traffic lands */
+  for (i = 0; i < RA_N; i++)
+    if (m->st[i].n > 0)
+      printf("RDRAMA,%s,%s,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu\n", name, agent_name[i],
+             (unsigned long long) m->acc_mb[i][0], (unsigned long long) m->acc_mb[i][1],
+             (unsigned long long) m->acc_mb[i][2], (unsigned long long) m->acc_mb[i][3],
+             (unsigned long long) m->bytes_mb[i][0], (unsigned long long) m->bytes_mb[i][1],
+             (unsigned long long) m->bytes_mb[i][2], (unsigned long long) m->bytes_mb[i][3]);
+  /* RDRAMH,<name>,<agent>,<16 KB block>:<accesses>,...: the non-zero blocks */
+  for (i = 0; i < RA_N; i++) {
+    int b, any = 0;
+    for (b = 0; b < 512; b++)
+      if (m->acc_blk[i][b]) {
+        if (!any) printf("RDRAMH,%s,%s", name, agent_name[i]);
+        printf(",%d:%u", b, m->acc_blk[i][b]);
+        any = 1;
+      }
+    if (any) printf("\n");
+  }
   /* RDRAMX,<name>,<victim>,<opener>,<bank>,<row misses>: which agent's access closed whose row */
   {
     int a, b, k;
