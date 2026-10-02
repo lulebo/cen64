@@ -797,30 +797,31 @@ void rdram_model_init(void) {
     if (tf != NULL && tf[0] && span_trace == NULL) span_trace = fopen(tf, "w");
   }
   struct rdram_params d = {
-    // Fitted 2026-10-01 to the console's HWCAL boot tests (rc6 cal ROM + the RDPLAB ROM): RDP tests through the
-    // span-trace replay (5.8% rms over 70 tests), CPU and CPU-while-RDP tests through emulator runs (11% rms).
-    // The earlier M64-calibrated serial model: eng=0,req=3,rdelay=20,wdelay=1,per_byte=0.5,row_miss=40,cpu_d=45,
-    // cpu_i=46,cpu_unc=24.6,cpu_wb=39.5,burst=128,px1=1.08,px2=2.16,fill=0.25,tri=32,rect=16,cmd=2,tmem8=1,
-    // sync=200,span=8,cmd_fetch=64,chunk=0,bank_busy=0,cpu_prio=-1 (its uncached-store and victim paths differ).
-    4.75, 21.2, 0.784, 0.621, 6.85, 54, 1, // req rdelay wdelay per_byte row_miss refresh refresh_close
+    // Fitted 2026-10-02 to a console: the boot tests (HWCAL), 24 game frames and 42 frame sections replayed alone
+    // (HWCAL_FRAMES), CPU misses / stores / uncached accesses alone, while the RDP draws and per RDRAM bank
+    // (HWCAL_MB): RDP tests 10.5% rms, CPU and contention ~11%; the rc6 bench scenes' RDP time per frame within
+    // ~1-5% (TTC 13%). The earlier M64-calibrated serial model: eng=0,req=3,rdelay=20,wdelay=1,per_byte=0.5,
+    // row_miss=40,cpu_d=45,cpu_i=46,cpu_unc=24.6,cpu_wb=39.5,burst=128,px1=1.08,px2=2.16,fill=0.25,tri=32,rect=16,
+    // cmd=2,tmem8=1,sync=200,span=8,cmd_fetch=64,chunk=0,bank_busy=0,cpu_prio=-1,ew_line=0.
+    4.75, 19.55, 0.539, 0.621, 4.11, 54, 1, // req rdelay wdelay per_byte row_miss refresh refresh_close
     21.69, 28.03, 21.46, 3.20, 13.91,   // cpu_d cpu_i cpu_unc cpu_wb cpu_uncw
-    64,                                 // burst
-    1.006, 2.052, 0.181, 0.25,          // px1 px2 fill copy
-    5.81, 28.99, 1.535, 0.879, 59.37, 0.553, // tri rect cmd tmem8 sync span
-    0, 20, 11, 1591, 128, 64,           // overlap bank_bits row_bits pi_gap cmd_fetch idle
+    32,                                 // burst
+    1.104, 1.892, 0.0623, 0.25,         // px1 px2 fill copy
+    6.26, 17.60, 2.00, 0.829, 56.33, 0.277, // tri rect cmd tmem8 sync span
+    0, 20, 11, 1591, 32, 0,             // overlap bank_bits row_bits pi_gap cmd_fetch idle
     1, 1,                               // cpu_bus rsp_bus (experiments: share of the channel time they occupy)
     0, 0,                               // cpu_rows rsp_rows (experiments: separate open-row state)
     0, 0, 0, 0, 0, 0,                   // iso ranges (experiments)
     8,                                  // chunk
-    1, 10.58, 2, 16, 2, 1, 4.02, 4.23, 3.72, 8, 0, // eng rd_lat rdp_d rdp_dw rdp_sb rdp_rprio span_r tta psync fchunk fetch_block
-    14.15, 12.76, 2, 0.722,             // span_rs span_ws align8 rd_occ
+    1, 11.52, 2, 0, 1, 1, 5.53, 7.34, 3.72, 8, 1, // eng rd_lat rdp_d rdp_dw rdp_sb rdp_rprio span_r tta psync fchunk fetch_block
+    14.15, 9.57, 1, 0.795,              // span_rs span_ws align8 rd_occ
     17.5,                               // bank_busy
     16.96,                              // cpu_wbv
     1, 4.83,                            // bank_rdp cpu_rocc
-    21.73,                              // cpu_prio
+    24.62,                              // cpu_prio
     0,                                  // span_wfull
-    8,                                  // ew_line
-    0,                                  // row_xmiss
+    8.64,                               // ew_line
+    4,                                  // row_xmiss
     0,                                  // vi_rows
     0                                   // vi_burst (0: burst)
   };
