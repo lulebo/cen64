@@ -6163,6 +6163,21 @@ void loading_pipeline(int start, int end, int tilenum, int coord_quad, int ltlut
 	}
 }
 
+static unsigned rdpstat_fbhash(void);
+static int primhash_from = -1, primhash_to = -1;
+static unsigned primhash_n = 0, primhash_frame = ~0u;
+static void primhash_report(int y0, int y1)
+{
+	if (primhash_from == -1) {
+		const char *e = getenv("CEN64_PRIMHASH");
+		primhash_from = -2;
+		if (e) { primhash_from = atoi(e); e = strchr(e, ':'); primhash_to = e ? atoi(e + 1) : primhash_from; }
+	}
+	if (primhash_from < 0 || (int) rdpstat.frame < primhash_from || (int) rdpstat.frame > primhash_to) return;
+	if (primhash_frame != rdpstat.frame) { primhash_frame = rdpstat.frame; primhash_n = 0; }
+	printf("PH,%u,%u,%d,%d,%08x\n", rdpstat.frame, primhash_n++, y0, y1, rdpstat_fbhash());
+}
+
 static void edgewalker_for_prims(int32_t* ewdata)
 {
 	int j = 0;
@@ -6622,7 +6637,7 @@ static void edgewalker_for_prims(int32_t* ewdata)
 		case CYCLE_TYPE_FILL: render_spans_fill(yhlimit >> 2, yllimit >> 2, flip); break;
 		default: debug("cycle_type %d", other_modes.cycle_type); break;
 	}
-	
+	primhash_report(yh, yl);
 	
 }
 
@@ -7673,6 +7688,24 @@ static void rdpstat_log_cmd(uint32_t cmd, uint32_t cmd_length)
 	printf("\n");
 }
 
+/* CEN64_ZHASH=1: RDPZ,<frame>,<hash> - FNV-1a over the z image (zb_address, the colour image's width and lines) */
+static void rdpstat_zhash(void)
+{
+	static int on = -1;
+	unsigned h = 2166136261u, lines = clip.yl >> 2, npix, base, i;
+	if (on < 0) on = getenv("CEN64_ZHASH") != NULL;
+	if (!on) return;
+	if (lines == 0 || lines > 480) lines = 240;
+	npix = (unsigned)fb_width * lines;
+	base = zb_address >> 1;
+	for (i = 0; i < npix; i++) {
+		unsigned idx = (base + i) & (RDRAM_MASK >> 1);
+		if (idx > idxlim16) break;
+		h = (h ^ (unsigned)rdram_16[idx]) * 16777619u;
+	}
+	printf("RDPZ,%u,%08x\n", rdpstat.frame, h);
+}
+
 static void rdpstat_report(void)
 {
 	texstat_frame_end(rdpstat.frame);
@@ -7686,6 +7719,7 @@ static void rdpstat_report(void)
 	       rdpstat.tris_cycle[2], rdpstat.tris_cycle[3], rdpstat.rects, rdpstat.fillrects,
 	       rdpstat.tmem_loads, rdpstat.fbwrite, rdpstat.fbfill, rdpstat.fbread,
 	       rdpstat.zread, rdpstat.zwrite, rdpstat_fbhash(), rspstat_imem_dma);
+	rdpstat_zhash();
 	if (cen64->rdp.timing.on && g_rdram.on) {
 		static uint64_t last_busy = 0;
 		cen64->rdp.timing.stat_busy_frame = (g_rdram.rdp_busy_total - last_busy) / 4;
